@@ -124,8 +124,8 @@ tr:hover td{background:#f7fafd}
       <div class="nav-section-label">Opérationnel</div>
       <button class="nav-btn" data-tab="detail">SODA</button>
       <button class="nav-btn" data-tab="etat">État des stocks</button>
-      <button class="nav-btn" data-tab="stock15">Produits stock 1 à 5</button>
-      <button class="nav-btn" data-tab="stock510">Stock 5 à 10</button>
+      <button class="nav-btn" data-tab="stock15">Stock 1 à 10</button>
+      <button class="nav-btn" data-tab="stock510">Stock 10 à 30</button>
       <button class="nav-btn" data-tab="rupture">Rupture</button>
       <button class="nav-btn" data-tab="anomalies">Anomalies</button>
       <div class="nav-section-label">Paramètres</div>
@@ -633,7 +633,6 @@ function anomalyRows(){
 
 // ---------- KPI HELPERS ----------
 function countStatut(s){ return RAW_ROWS.filter(r=>r.STATUT===s).length; }
-function countType(t){ return RAW_ROWS.filter(r=>r.TYPE_PRODUIT===t).length; }
 
 let RUPTURE_EXCLUSIONS_CACHE = null;
 function getRuptureExclusions(){
@@ -702,35 +701,70 @@ function subscribeToSettingsChanges(){
 }
 
 function ruptureCountForRows(rows){
-  const allProducts = new Set(rows.filter(r=>r.PRODUIT).map(r=>r.PRODUIT));
+  const nserieToName = buildNserieToNameMap(rows);
+  const resolveProduit = r => r.PRODUIT || (r.N_SERIE && nserieToName[r.N_SERIE]) || '';
+  const allProducts = new Set(rows.map(resolveProduit).filter(Boolean));
   const stockKube = rows.filter(r=>r.STATUT==='STOCK KUBE');
   const qty = {};
-  stockKube.forEach(r=>{ qty[r.PRODUIT] = (qty[r.PRODUIT]||0)+1; });
+  stockKube.forEach(r=>{ const p=resolveProduit(r); if(p) qty[p] = (qty[p]||0)+1; });
   const exclusions = getRuptureExclusions();
   let count = 0;
   allProducts.forEach(p=>{ if((qty[p]||0)===0 && !exclusions[p]) count++; });
   return count;
 }
 
+// Retrouve, pour un N_SERIE donné, le nom de produit le plus fréquent parmi
+// les lignes qui ont un PRODUIT renseigné — utile pour rattacher une ligne
+// sans nom (PRODUIT vide) au bon produit plutôt que de créer une entrée
+// "PRODUIT SANS NOM" à part.
+function buildNserieToNameMap(rows){
+  const freq = {};
+  rows.forEach(r=>{
+    if(r.N_SERIE && r.PRODUIT){
+      freq[r.N_SERIE] = freq[r.N_SERIE] || {};
+      freq[r.N_SERIE][r.PRODUIT] = (freq[r.N_SERIE][r.PRODUIT]||0)+1;
+    }
+  });
+  const map = {};
+  Object.keys(freq).forEach(ns=>{
+    const names = freq[ns];
+    let best = null;
+    Object.keys(names).forEach(n=>{ if(!best || names[n]>names[best]) best = n; });
+    map[ns] = best;
+  });
+  return map;
+}
+
 function productBands(){
-  // univers = tous les PRODUIT distincts non vides ; quantite = nb de lignes STATUT=STOCK KUBE pour ce produit
-  const allProducts = new Set(RAW_ROWS.filter(r=>r.PRODUIT).map(r=>r.PRODUIT));
+  // univers = tous les PRODUIT distincts non vides (ou retrouvés via N_SERIE) ;
+  // quantite = nb de lignes STATUT=STOCK KUBE pour ce produit
+  const nserieToName = buildNserieToNameMap(RAW_ROWS);
+  const resolveProduit = r => r.PRODUIT || (r.N_SERIE && nserieToName[r.N_SERIE]) || '';
+  const allProducts = new Set(RAW_ROWS.map(resolveProduit).filter(Boolean));
   const stockKube = RAW_ROWS.filter(r=>r.STATUT==='STOCK KUBE');
   const qty = {};
-  stockKube.forEach(r=>{ qty[r.PRODUIT] = (qty[r.PRODUIT]||0)+1; });
-  const list0Raw = [], list05 = [], list610 = [];
+  const typesByProduct = {};
+  stockKube.forEach(r=>{
+    const p = resolveProduit(r);
+    if(!p) return;
+    qty[p] = (qty[p]||0)+1;
+    typesByProduct[p] = typesByProduct[p] || new Set();
+    if(r.TYPE_PRODUIT) typesByProduct[p].add(r.TYPE_PRODUIT);
+  });
+  const list0Raw = [], listUnder10 = [], listUnder30 = [];
   allProducts.forEach(p=>{
     const q = qty[p]||0;
-    if(q===0) list0Raw.push({produit:p, qty:q});
-    else if(q>=1 && q<=5) list05.push({produit:p, qty:q});
-    else if(q>=6 && q<=10) list610.push({produit:p, qty:q});
+    const types = [...(typesByProduct[p]||[])];
+    if(q===0) list0Raw.push({produit:p, qty:q, types});
+    else if(q>=1 && q<10) listUnder10.push({produit:p, qty:q, types});
+    else if(q>=10 && q<30) listUnder30.push({produit:p, qty:q, types});
   });
   list0Raw.sort((a,b)=>a.produit.localeCompare(b.produit));
-  list05.sort((a,b)=>a.qty-b.qty);
-  list610.sort((a,b)=>a.qty-b.qty);
+  listUnder10.sort((a,b)=>a.qty-b.qty);
+  listUnder30.sort((a,b)=>a.qty-b.qty);
   const exclusions = getRuptureExclusions();
   const list0 = list0Raw.filter(x=> !exclusions[x.produit]);
-  return {list0, list0Raw, list05, list610};
+  return {list0, list0Raw, listUnder10, listUnder30};
 }
 
 function marqueCounts(){
@@ -811,8 +845,10 @@ function updateModalTable(q){
 function closeModal(){ document.getElementById('modalRoot').innerHTML=''; modalBackStack = []; }
 
 let bandAllList = [], bandClickable = false, currentBandTitle = '';
-function openBandModal(title, list, clickable){
-  bandAllList = list; bandClickable = clickable; currentBandTitle = title;
+let bandWithTypes = false;
+function openBandModal(title, list, clickable, withTypes=false){
+  bandAllList = list; bandClickable = clickable; currentBandTitle = title; bandWithTypes = withTypes;
+  const typeHeaders = withTypes ? TYPE_COLS.map(t=>`<th style="text-align:center">${t}</th>`).join('') : '';
   const root = document.getElementById('modalRoot');
   root.innerHTML = `<div class="modal-bg" onclick="if(event.target===this) closeModal()">
     <div class="modal">
@@ -821,7 +857,7 @@ function openBandModal(title, list, clickable){
         <span class="count-pill" id="bandCountPill"></span>
         <button onclick="closeModal()">Fermer</button></div>
       <div class="modal-body">
-        <div class="table-wrap"><table><thead><tr><th>Produit</th><th>Qty STOCK KUBE</th></tr></thead><tbody id="bandTbody"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>Produit</th><th>Qty STOCK KUBE</th>${typeHeaders}</tr></thead><tbody id="bandTbody"></tbody></table></div>
         <div class="small">${clickable?'Cliquer sur un produit pour voir le détail des lignes STOCK KUBE correspondantes.':'Aucune ligne STOCK KUBE : ces produits sont à 0 (rupture).'}</div>
       </div>
     </div></div>`;
@@ -835,29 +871,42 @@ function updateBandTable(q){
   const tbody = document.getElementById('bandTbody');
   tbody.innerHTML = list.map(item=>{
     const safe = item.produit.replace(/'/g,"\\'");
+    const typeCells = bandWithTypes ? TYPE_COLS.map(t=>`<td style="text-align:center">${(item.types||[]).includes(t)?'✓':''}</td>`).join('') : '';
     return bandClickable
-      ? `<tr style="cursor:pointer" onclick="showProductDetail('${safe}')"><td>${item.produit} 🔍</td><td>${item.qty}</td></tr>`
-      : `<tr><td>${item.produit}</td><td>${item.qty}</td></tr>`;
+      ? `<tr style="cursor:pointer" onclick="showProductDetail('${safe}')"><td>${item.produit} 🔍</td><td>${item.qty}</td>${typeCells}</tr>`
+      : `<tr><td>${item.produit}</td><td>${item.qty}</td>${typeCells}</tr>`;
   }).join('');
 }
 
+function rowsForProduct(produit){
+  const nserieToName = buildNserieToNameMap(RAW_ROWS);
+  return RAW_ROWS.filter(r=>{
+    if(r.STATUT!=='STOCK KUBE') return false;
+    const resolved = r.PRODUIT || (r.N_SERIE && nserieToName[r.N_SERIE]) || '';
+    return resolved===produit;
+  });
+}
 function showProductDetail(produit){
-  const rows = RAW_ROWS.filter(r=>r.PRODUIT===produit && r.STATUT==='STOCK KUBE');
+  const rows = rowsForProduct(produit);
   pushModalBack(()=> openBandModal(currentBandTitle, bandAllList, bandClickable));
   openModal(`Détail — ${produit} (STOCK KUBE)`, UI_COLS, rows);
 }
 function showProductDetailPlain(produit){
-  const rows = RAW_ROWS.filter(r=>r.PRODUIT===produit && r.STATUT==='STOCK KUBE');
+  const rows = rowsForProduct(produit);
   openModal(`Détail — ${produit} (STOCK KUBE)`, UI_COLS, rows);
 }
 
 // ---------- PAGES STOCK 1 À 5 / STOCK 5 À 10 / RUPTURE ----------
+const TYPE_COLS = ['FACTICE','LDU','RDU','RDU LPM'];
 let stockBandLists = {stock15:[], stock510:[], rupture:[]};
 let stockBandClickable = {stock15:true, stock510:true, rupture:false};
-function renderStockBandTab(key, list, title, clickable=true){
+let stockBandWithTypes = {stock15:true, stock510:true, rupture:false};
+function renderStockBandTab(key, list, title, clickable=true, withTypes=false){
   const el = document.getElementById('tab-'+key);
   stockBandLists[key] = list;
   stockBandClickable[key] = clickable;
+  stockBandWithTypes[key] = withTypes;
+  const typeHeaders = withTypes ? TYPE_COLS.map(t=>`<th style="text-align:center">${t}</th>`).join('') : '';
   el.innerHTML = `
   <div class="panel">
     <h3>${title}</h3>
@@ -867,7 +916,7 @@ function renderStockBandTab(key, list, title, clickable=true){
     </div>
     <div class="table-wrap" style="max-height:640px">
       <table>
-        <thead><tr><th>Produit</th><th>Qty STOCK KUBE</th></tr></thead>
+        <thead><tr><th>Produit</th><th>Qty STOCK KUBE</th>${typeHeaders}</tr></thead>
         <tbody id="${key}Tbody"></tbody>
       </table>
     </div>
@@ -878,31 +927,32 @@ function renderStockBandTab(key, list, title, clickable=true){
 function filterStockBandTab(key, q){
   const list = stockBandLists[key] || [];
   const clickable = stockBandClickable[key]!==false;
+  const withTypes = !!stockBandWithTypes[key];
   q = (q||'').toUpperCase();
   const filtered = q ? list.filter(x=>x.produit.toUpperCase().includes(q)) : list;
   document.getElementById(key+'CountPill').innerHTML = `<b>${filtered.length}</b><span>produit(s)</span>`;
   document.getElementById(key+'Tbody').innerHTML = filtered.map(item=>{
     const safe = item.produit.replace(/'/g,"\\'");
+    const typeCells = withTypes ? TYPE_COLS.map(t=>`<td style="text-align:center">${(item.types||[]).includes(t)?'✓':''}</td>`).join('') : '';
     return clickable
-      ? `<tr style="cursor:pointer" onclick="showProductDetailPlain('${safe}')"><td>${item.produit} 🔍</td><td>${item.qty}</td></tr>`
-      : `<tr><td>${item.produit}</td><td>${item.qty}</td></tr>`;
+      ? `<tr style="cursor:pointer" onclick="showProductDetailPlain('${safe}')"><td>${item.produit} 🔍</td><td>${item.qty}</td>${typeCells}</tr>`
+      : `<tr><td>${item.produit}</td><td>${item.qty}</td>${typeCells}</tr>`;
   }).join('');
 }
 function renderStock15(){
   const bands = productBands();
-  renderStockBandTab('stock15', bands.list05, 'Produits stock 1 à 5 (STOCK KUBE, par produit)', true);
+  renderStockBandTab('stock15', bands.listUnder10, 'Stock 1 à 10 (STOCK KUBE, par produit)', true, true);
 }
 function renderStock510(){
   const bands = productBands();
-  renderStockBandTab('stock510', bands.list610, 'Stock 5 à 10 (STOCK KUBE, par produit)', true);
+  renderStockBandTab('stock510', bands.listUnder30, 'Stock 10 à 30 (STOCK KUBE, par produit)', true, true);
 }
 function renderRupture(){
   const bands = productBands();
-  renderStockBandTab('rupture', bands.list0, `Rupture — produits à 0 en STOCK KUBE (${bands.list0.length})`, false);
+  renderStockBandTab('rupture', bands.list0, `Rupture — produits à 0 en STOCK KUBE (${bands.list0.length})`, false, false);
 }
 
 function kpiRowsByStatut(s){ return RAW_ROWS.filter(r=>r.STATUT===s); }
-function kpiRowsByType(t){ return RAW_ROWS.filter(r=>r.TYPE_PRODUIT===t); }
 
 function renderDashboard(){
   const el = document.getElementById('tab-dashboard');
@@ -910,11 +960,11 @@ function renderDashboard(){
   const anomN = anomalyRows().length;
 
   document.getElementById('topKpiGrid').innerHTML = `
-    <div class="kpi kpi-orange-filled" onclick='openBandModal("Stock 1 à 5 (STOCK KUBE, par produit)", ${JSON.stringify(bands.list05)}, true)'>
-      <div class="kv">${bands.list05.length}</div><div class="kl">Produits stock 1 à 5</div>
+    <div class="kpi kpi-orange-filled" onclick='openBandModal("Stock 1 à 10 (STOCK KUBE, par produit)", ${JSON.stringify(bands.listUnder10)}, true, true)'>
+      <div class="kv">${bands.listUnder10.length}</div><div class="kl">Produits stock 1 à 10</div>
     </div>
-    <div class="kpi kpi-darkorange-filled" onclick='openBandModal("Stock 6 à 10 (STOCK KUBE, par produit)", ${JSON.stringify(bands.list610)}, true)'>
-      <div class="kv">${bands.list610.length}</div><div class="kl">Produits stock 5 à 10</div>
+    <div class="kpi kpi-darkorange-filled" onclick='openBandModal("Stock 10 à 30 (STOCK KUBE, par produit)", ${JSON.stringify(bands.listUnder30)}, true, true)'>
+      <div class="kv">${bands.listUnder30.length}</div><div class="kl">Produits stock 10 à 30</div>
     </div>
     <div class="kpi kpi-red-filled" onclick='openBandModal("Rupture — produits à 0 en STOCK KUBE", ${JSON.stringify(bands.list0)}, false)'>
       <div class="kv">${bands.list0.length}</div><div class="kl">Produits en rupture (stock 0)</div>
@@ -931,9 +981,7 @@ function renderDashboard(){
     <div class="kpi red" onclick='openModal("Statut HS", ${JSON.stringify(UI_COLS)}, ${JSON.stringify(kpiRowsByStatut('HS'))})'>
       <div class="kv">${countStatut('HS')}</div><div class="kl">HS</div>
     </div>
-    <div class="kpi orange" onclick='openModal("TYPE_PRODUIT = LDU", ${JSON.stringify(UI_COLS)}, ${JSON.stringify(kpiRowsByType('LDU'))})'>
-      <div class="kv">${countType('LDU')}</div><div class="kl">Nombre de LDU</div>
-    </div>`;
+    `;
 
   el.innerHTML = `
   <div class="panel" style="padding:12px 16px;margin-bottom:14px">
@@ -1117,13 +1165,13 @@ let BAND_MAP = {};
 function refreshBandMap(){
   BAND_MAP = {};
   const bands = productBands();
-  bands.list05.forEach(x=> BAND_MAP[x.produit]='red');
-  bands.list610.forEach(x=> BAND_MAP[x.produit]='orange');
+  bands.listUnder10.forEach(x=> BAND_MAP[x.produit]='red');
+  bands.listUnder30.forEach(x=> BAND_MAP[x.produit]='orange');
 }
 function alertBadge(produit){
   const b = BAND_MAP[produit];
-  if(b==='red') return `<span class="badge b-red">Stock 1 à 5</span>`;
-  if(b==='orange') return `<span class="badge b-orange">Stock 5 à 10</span>`;
+  if(b==='red') return `<span class="badge b-red">Stock 1 à 10</span>`;
+  if(b==='orange') return `<span class="badge b-orange">Stock 10 à 30</span>`;
   return '';
 }
 
@@ -1234,9 +1282,10 @@ function weekLabel(d){
 function buildEtatPivotFor(rows){
   const wanted = ['FACTICE','LDU','RDU','RDU LPM'];
   const stockKube = rows.filter(r=>r.STATUT==='STOCK KUBE' && wanted.includes(r.TYPE_PRODUIT));
+  const nserieToName = buildNserieToNameMap(rows);
   const byProduct = {};
   stockKube.forEach(r=>{
-    const label = r.PRODUIT || `PRODUIT SANS NOM (ID ${r.ID}${r.N_SERIE?', N_SERIE '+r.N_SERIE:''})`;
+    const label = r.PRODUIT || (r.N_SERIE && nserieToName[r.N_SERIE]) || `PRODUIT SANS NOM (ID ${r.ID}${r.N_SERIE?', N_SERIE '+r.N_SERIE:''})`;
     byProduct[label] = byProduct[label] || {};
     byProduct[label][r.TYPE_PRODUIT] = (byProduct[label][r.TYPE_PRODUIT]||0)+1;
   });
