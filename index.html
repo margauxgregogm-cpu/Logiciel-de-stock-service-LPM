@@ -332,6 +332,47 @@ async function loadHistoryFromSupabase(){
     HISTORY_CACHE = getLocalHistory();
   }
 }
+
+// Synchronisation multi-poste : quand un autre poste importe ou supprime un
+// fichier, on veut que ça se reflète ici sans action de l'utilisateur. La
+// colonne "data" peut être volumineuse (gros imports) et dépasser la limite
+// de taille de Supabase Realtime, donc le message reçu n'est qu'un signal :
+// on va toujours rechercher les données fraîches via une requête normale.
+async function refreshHistoryFromRemote(){
+  const previousLatestId = HISTORY_CACHE[0] ? HISTORY_CACHE[0].id : null;
+  const previousIds = new Set(HISTORY_CACHE.map(e=>e.id));
+  await loadHistoryFromSupabase();
+  const stillActiveExists = HISTORY_CACHE.some(e=>e.id===currentHistoryId);
+  if(currentHistoryId && !stillActiveExists){
+    // l'import affiché a été supprimé ailleurs
+    currentHistoryId = null;
+    if(HISTORY_CACHE.length>0) openHistoryEntry(HISTORY_CACHE[0].id);
+    else { RAW_ROWS = []; ANOMALIES = []; showEmptyState(); }
+  } else if(HISTORY_CACHE.length>0 && HISTORY_CACHE[0].id!==previousLatestId && !previousIds.has(HISTORY_CACHE[0].id)){
+    // un nouvel import est arrivé ailleurs : on l'affiche
+    openHistoryEntry(HISTORY_CACHE[0].id);
+  }
+  const histTab = document.getElementById('tab-historique');
+  if(histTab && !histTab.classList.contains('hide')) renderHistorique();
+}
+
+function subscribeToHistoryChanges(){
+  if(!sb) return;
+  sb.channel('import_history_changes')
+    .on('postgres_changes', {event:'*', schema:'public', table:'import_history'}, ()=>{ refreshHistoryFromRemote(); })
+    .subscribe();
+  // Filet de sécurité si Realtime rate un évènement (gros payload, etc.)
+  setInterval(async ()=>{
+    try{
+      const {data, error} = await sb.from('import_history').select('id').order('imported_at',{ascending:false}).limit(1);
+      if(error) throw error;
+      const latestId = data && data[0] ? data[0].id : null;
+      const knownId = HISTORY_CACHE[0] ? HISTORY_CACHE[0].id : null;
+      if(latestId!==knownId || (HISTORY_CACHE.length===0 && latestId)) refreshHistoryFromRemote();
+    }catch(e){ /* on réessaiera au prochain tick */ }
+  }, 20000);
+}
+
 async function addHistoryEntry(){
   const entry = {
     id: Date.now()+'_'+Math.random().toString(36).slice(2,7),
@@ -1404,6 +1445,7 @@ function showEmptyState(){
   } else {
     showEmptyState();
   }
+  subscribeToHistoryChanges();
 })();
 </script>
 </body>

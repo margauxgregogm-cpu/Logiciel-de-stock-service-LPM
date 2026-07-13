@@ -26,3 +26,7 @@ create policy "anon full access" on import_history
 
 create policy "anon full access" on app_settings
   for all to anon using (true) with check (true);
+
+-- Realtime : permet aux autres postes ouverts d'être notifiés instantanément
+-- d'un nouvel import ou d'une suppression (sans attendre un rechargement).
+alter publication supabase_realtime add table import_history;
