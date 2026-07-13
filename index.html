@@ -868,6 +868,16 @@ function renderDashboard(){
   const gLabels = gData.map(x=>x.gamme);
   const gFactice = gData.map(x=>x.factice);
   const gAutres = gData.map(x=>x.autres);
+  const whiteBackgroundPlugin = {
+    id:'whiteBackgroundPlugin',
+    beforeDraw(chart){
+      const {ctx} = chart;
+      ctx.save();
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, chart.width, chart.height);
+      ctx.restore();
+    }
+  };
   const barValuePlugin = {
     id:'barValuePlugin',
     afterDatasetsDraw(chart){
@@ -911,7 +921,7 @@ function renderDashboard(){
         }
       }
     },
-    plugins:[barValuePlugin]
+    plugins:[whiteBackgroundPlugin, barValuePlugin]
   });
 
   renderEvolutionCharts();
