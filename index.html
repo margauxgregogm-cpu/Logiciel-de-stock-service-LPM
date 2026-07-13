@@ -374,9 +374,10 @@ function subscribeToHistoryChanges(){
 }
 
 async function addHistoryEntry(){
+  const {date: fileDate} = extractFileDate(fileInfo.name, fileInfo.ts);
   const entry = {
     id: Date.now()+'_'+Math.random().toString(36).slice(2,7),
-    date: fileInfo.ts.toISOString(),
+    date: fileDate.toISOString(),
     filename: fileInfo.name,
     rows: RAW_ROWS.length,
     anomalies: anomalyRows().length,
@@ -831,12 +832,12 @@ function renderDashboard(){
     </div>`;
 
   el.innerHTML = `
-  <div class="panel">
-    <h3 style="text-align:center;border-left:none;padding-left:0">Stock par gamme à Kube Design (HS exclus)</h3>
-    <div style="height:400px"><canvas id="gammeCanvas"></canvas></div>
+  <div class="panel" style="padding:12px 16px;margin-bottom:14px">
+    <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 6px">Stock par gamme à Kube Design (HS exclus)</h3>
+    <div style="height:200px"><canvas id="gammeCanvas"></canvas></div>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
-    <div class="panel">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div class="panel" style="padding:12px 16px;margin-bottom:0">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <h3 style="margin:0">Évolution des anomalies</h3>
         <select onchange="setEvolPeriod('anom', this.value)">
@@ -846,9 +847,9 @@ function renderDashboard(){
           <option value="annee"${anomEvolPeriod==='annee'?' selected':''}>Année</option>
         </select>
       </div>
-      <div style="height:280px;margin-top:12px"><canvas id="anomEvolCanvas"></canvas></div>
+      <div style="height:140px;margin-top:8px"><canvas id="anomEvolCanvas"></canvas></div>
     </div>
-    <div class="panel">
+    <div class="panel" style="padding:12px 16px;margin-bottom:0">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <h3 style="margin:0">Évolution des ruptures</h3>
         <select onchange="setEvolPeriod('rupt', this.value)">
@@ -858,7 +859,7 @@ function renderDashboard(){
           <option value="annee"${ruptEvolPeriod==='annee'?' selected':''}>Année</option>
         </select>
       </div>
-      <div style="height:280px;margin-top:12px"><canvas id="ruptEvolCanvas"></canvas></div>
+      <div style="height:140px;margin-top:8px"><canvas id="ruptEvolCanvas"></canvas></div>
     </div>
   </div>`;
 
