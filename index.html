@@ -1128,7 +1128,12 @@ function getISOWeek(d){
   const yearStart = new Date(Date.UTC(date.getUTCFullYear(),0,1));
   return Math.ceil((((date-yearStart)/86400000)+1)/7);
 }
-function weekLabel(d){ return 'W'+String(getISOWeek(d||new Date())).padStart(2,'0'); }
+function weekLabel(d){
+  // L'état des stocks porte sur la semaine suivante (S+1), pas la semaine en cours.
+  const base = d || new Date();
+  const nextWeek = new Date(base.getTime() + 7*86400000);
+  return 'W'+String(getISOWeek(nextWeek)).padStart(2,'0');
+}
 
 function buildEtatPivotFor(rows){
   const wanted = ['FACTICE','LDU','RDU','RDU LPM'];
