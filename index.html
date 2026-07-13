@@ -124,6 +124,8 @@ tr:hover td{background:#f7fafd}
       <div class="nav-section-label">Opérationnel</div>
       <button class="nav-btn" data-tab="detail">SODA</button>
       <button class="nav-btn" data-tab="etat">État des stocks</button>
+      <button class="nav-btn" data-tab="stock15">Produits stock 1 à 5</button>
+      <button class="nav-btn" data-tab="stock510">Stock 5 à 10</button>
       <button class="nav-btn" data-tab="anomalies">Anomalies</button>
       <div class="nav-section-label">Paramètres</div>
       <button class="nav-btn" data-tab="params" style="color:#ffc2d9">Paramètres anomalies</button>
@@ -149,6 +151,8 @@ tr:hover td{background:#f7fafd}
       <div id="tab-dashboard"></div>
       <div id="tab-detail" class="hide"></div>
       <div id="tab-etat" class="hide"></div>
+      <div id="tab-stock15" class="hide"></div>
+      <div id="tab-stock510" class="hide"></div>
       <div id="tab-anomalies" class="hide"></div>
       <div id="tab-params" class="hide"></div>
       <div id="tab-ruptureParams" class="hide"></div>
@@ -293,6 +297,8 @@ function ingest(json, filename){
   renderDashboard();
   renderDetail();
   renderEtat();
+  renderStock15();
+  renderStock510();
   renderAnomalies();
 }
 
@@ -445,6 +451,8 @@ function openHistoryEntry(id){
   renderDashboard();
   renderDetail();
   renderEtat();
+  renderStock15();
+  renderStock510();
   renderAnomalies();
   showTab('dashboard');
 }
@@ -803,6 +811,50 @@ function showProductDetail(produit){
   const rows = RAW_ROWS.filter(r=>r.PRODUIT===produit && r.STATUT==='STOCK KUBE');
   pushModalBack(()=> openBandModal(currentBandTitle, bandAllList, bandClickable));
   openModal(`Détail — ${produit} (STOCK KUBE)`, UI_COLS, rows);
+}
+function showProductDetailPlain(produit){
+  const rows = RAW_ROWS.filter(r=>r.PRODUIT===produit && r.STATUT==='STOCK KUBE');
+  openModal(`Détail — ${produit} (STOCK KUBE)`, UI_COLS, rows);
+}
+
+// ---------- PAGES STOCK 1 À 5 / STOCK 5 À 10 ----------
+let stockBandLists = {stock15:[], stock510:[]};
+function renderStockBandTab(key, list, title){
+  const el = document.getElementById('tab-'+key);
+  stockBandLists[key] = list;
+  el.innerHTML = `
+  <div class="panel">
+    <h3>${title}</h3>
+    <div class="toolbar">
+      <input placeholder="Rechercher un produit..." style="width:280px" oninput="filterStockBandTab('${key}', this.value)">
+      <span class="count-pill" id="${key}CountPill"></span>
+    </div>
+    <div class="table-wrap" style="max-height:640px">
+      <table>
+        <thead><tr><th>Produit</th><th>Qty STOCK KUBE</th></tr></thead>
+        <tbody id="${key}Tbody"></tbody>
+      </table>
+    </div>
+  </div>`;
+  filterStockBandTab(key, '');
+}
+function filterStockBandTab(key, q){
+  const list = stockBandLists[key] || [];
+  q = (q||'').toUpperCase();
+  const filtered = q ? list.filter(x=>x.produit.toUpperCase().includes(q)) : list;
+  document.getElementById(key+'CountPill').innerHTML = `<b>${filtered.length}</b><span>produit(s)</span>`;
+  document.getElementById(key+'Tbody').innerHTML = filtered.map(item=>{
+    const safe = item.produit.replace(/'/g,"\\'");
+    return `<tr style="cursor:pointer" onclick="showProductDetailPlain('${safe}')"><td>${item.produit} 🔍</td><td>${item.qty}</td></tr>`;
+  }).join('');
+}
+function renderStock15(){
+  const bands = productBands();
+  renderStockBandTab('stock15', bands.list05, 'Produits stock 1 à 5 (STOCK KUBE, par produit)');
+}
+function renderStock510(){
+  const bands = productBands();
+  renderStockBandTab('stock510', bands.list610, 'Stock 5 à 10 (STOCK KUBE, par produit)');
 }
 
 function kpiRowsByStatut(s){ return RAW_ROWS.filter(r=>r.STATUT===s); }
@@ -1428,7 +1480,7 @@ function saveAnomalyParams(){
 
 // ---------- NAV / DnD ----------
 function showTab(name){
-  ['dashboard','detail','etat','anomalies','params','ruptureParams','historique'].forEach(t=>{
+  ['dashboard','detail','etat','stock15','stock510','anomalies','params','ruptureParams','historique'].forEach(t=>{
     document.getElementById('tab-'+t).classList.toggle('hide', t!==name);
   });
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
