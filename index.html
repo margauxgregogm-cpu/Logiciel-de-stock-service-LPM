@@ -126,6 +126,7 @@ tr:hover td{background:#f7fafd}
       <button class="nav-btn" data-tab="etat">État des stocks</button>
       <button class="nav-btn" data-tab="stock15">Produits stock 1 à 5</button>
       <button class="nav-btn" data-tab="stock510">Stock 5 à 10</button>
+      <button class="nav-btn" data-tab="rupture">Rupture</button>
       <button class="nav-btn" data-tab="anomalies">Anomalies</button>
       <div class="nav-section-label">Paramètres</div>
       <button class="nav-btn" data-tab="params" style="color:#ffc2d9">Paramètres anomalies</button>
@@ -153,6 +154,7 @@ tr:hover td{background:#f7fafd}
       <div id="tab-etat" class="hide"></div>
       <div id="tab-stock15" class="hide"></div>
       <div id="tab-stock510" class="hide"></div>
+      <div id="tab-rupture" class="hide"></div>
       <div id="tab-anomalies" class="hide"></div>
       <div id="tab-params" class="hide"></div>
       <div id="tab-ruptureParams" class="hide"></div>
@@ -299,6 +301,7 @@ function ingest(json, filename){
   renderEtat();
   renderStock15();
   renderStock510();
+  renderRupture();
   renderAnomalies();
 }
 
@@ -453,6 +456,7 @@ function openHistoryEntry(id){
   renderEtat();
   renderStock15();
   renderStock510();
+  renderRupture();
   renderAnomalies();
   showTab('dashboard');
 }
@@ -653,18 +657,48 @@ async function syncSettingToSupabase(key, value){
     console.warn(`Échec de l'enregistrement Supabase (paramètre ${key}) :`, e);
   }
 }
+let settingsUpdatedAt = {};
 async function loadSettingsFromSupabase(){
   if(!sb) return;
   try{
     const {data, error} = await sb.from('app_settings').select('*').in('key', ['anomaly_rules','rupture_exclusions']);
     if(error) throw error;
     data.forEach(row=>{
+      settingsUpdatedAt[row.key] = row.updated_at;
       if(row.key==='anomaly_rules'){ ANOMALY_RULES_CACHE = row.value; try{ localStorage.setItem('soda_anomaly_rules', JSON.stringify(row.value)); }catch(e){} }
       if(row.key==='rupture_exclusions'){ RUPTURE_EXCLUSIONS_CACHE = row.value; try{ localStorage.setItem('soda_rupture_exclusions', JSON.stringify(row.value)); }catch(e){} }
     });
   }catch(e){
     console.warn('Supabase indisponible, paramètres locaux utilisés.', e);
   }
+}
+
+// Synchronisation multi-poste des paramètres (règles anomalies, exclusions
+// ruptures) : dès qu'un poste enregistre, les autres se mettent à jour tout
+// seuls (Realtime + filet de sécurité par sondage toutes les 20 secondes).
+async function refreshSettingsFromRemote(){
+  await loadSettingsFromSupabase();
+  renderDashboard();
+  renderAnomalies();
+  renderRupture();
+}
+function subscribeToSettingsChanges(){
+  if(!sb) return;
+  sb.channel('app_settings_changes')
+    .on('postgres_changes', {event:'*', schema:'public', table:'app_settings'}, ()=>{ refreshSettingsFromRemote(); })
+    .subscribe();
+  setInterval(async ()=>{
+    try{
+      const {data, error} = await sb.from('app_settings').select('key,updated_at');
+      if(error) throw error;
+      let changed = false;
+      data.forEach(row=>{
+        if(settingsUpdatedAt[row.key] && settingsUpdatedAt[row.key]!==row.updated_at) changed = true;
+        settingsUpdatedAt[row.key] = row.updated_at;
+      });
+      if(changed) refreshSettingsFromRemote();
+    }catch(e){ /* on réessaiera au prochain tick */ }
+  }, 20000);
 }
 
 function ruptureCountForRows(rows){
@@ -817,11 +851,13 @@ function showProductDetailPlain(produit){
   openModal(`Détail — ${produit} (STOCK KUBE)`, UI_COLS, rows);
 }
 
-// ---------- PAGES STOCK 1 À 5 / STOCK 5 À 10 ----------
-let stockBandLists = {stock15:[], stock510:[]};
-function renderStockBandTab(key, list, title){
+// ---------- PAGES STOCK 1 À 5 / STOCK 5 À 10 / RUPTURE ----------
+let stockBandLists = {stock15:[], stock510:[], rupture:[]};
+let stockBandClickable = {stock15:true, stock510:true, rupture:false};
+function renderStockBandTab(key, list, title, clickable=true){
   const el = document.getElementById('tab-'+key);
   stockBandLists[key] = list;
+  stockBandClickable[key] = clickable;
   el.innerHTML = `
   <div class="panel">
     <h3>${title}</h3>
@@ -835,26 +871,34 @@ function renderStockBandTab(key, list, title){
         <tbody id="${key}Tbody"></tbody>
       </table>
     </div>
+    ${clickable ? '' : '<div class="small" style="margin-top:10px">Aucune ligne STOCK KUBE : ces produits sont à 0 (rupture).</div>'}
   </div>`;
   filterStockBandTab(key, '');
 }
 function filterStockBandTab(key, q){
   const list = stockBandLists[key] || [];
+  const clickable = stockBandClickable[key]!==false;
   q = (q||'').toUpperCase();
   const filtered = q ? list.filter(x=>x.produit.toUpperCase().includes(q)) : list;
   document.getElementById(key+'CountPill').innerHTML = `<b>${filtered.length}</b><span>produit(s)</span>`;
   document.getElementById(key+'Tbody').innerHTML = filtered.map(item=>{
     const safe = item.produit.replace(/'/g,"\\'");
-    return `<tr style="cursor:pointer" onclick="showProductDetailPlain('${safe}')"><td>${item.produit} 🔍</td><td>${item.qty}</td></tr>`;
+    return clickable
+      ? `<tr style="cursor:pointer" onclick="showProductDetailPlain('${safe}')"><td>${item.produit} 🔍</td><td>${item.qty}</td></tr>`
+      : `<tr><td>${item.produit}</td><td>${item.qty}</td></tr>`;
   }).join('');
 }
 function renderStock15(){
   const bands = productBands();
-  renderStockBandTab('stock15', bands.list05, 'Produits stock 1 à 5 (STOCK KUBE, par produit)');
+  renderStockBandTab('stock15', bands.list05, 'Produits stock 1 à 5 (STOCK KUBE, par produit)', true);
 }
 function renderStock510(){
   const bands = productBands();
-  renderStockBandTab('stock510', bands.list610, 'Stock 5 à 10 (STOCK KUBE, par produit)');
+  renderStockBandTab('stock510', bands.list610, 'Stock 5 à 10 (STOCK KUBE, par produit)', true);
+}
+function renderRupture(){
+  const bands = productBands();
+  renderStockBandTab('rupture', bands.list0, `Rupture — produits à 0 en STOCK KUBE (${bands.list0.length})`, false);
 }
 
 function kpiRowsByStatut(s){ return RAW_ROWS.filter(r=>r.STATUT===s); }
@@ -1480,7 +1524,7 @@ function saveAnomalyParams(){
 
 // ---------- NAV / DnD ----------
 function showTab(name){
-  ['dashboard','detail','etat','stock15','stock510','anomalies','params','ruptureParams','historique'].forEach(t=>{
+  ['dashboard','detail','etat','stock15','stock510','rupture','anomalies','params','ruptureParams','historique'].forEach(t=>{
     document.getElementById('tab-'+t).classList.toggle('hide', t!==name);
   });
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
@@ -1522,6 +1566,7 @@ function showEmptyState(){
     showEmptyState();
   }
   subscribeToHistoryChanges();
+  subscribeToSettingsChanges();
 })();
 </script>
 </body>
