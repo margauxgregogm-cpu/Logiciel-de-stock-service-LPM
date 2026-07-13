@@ -796,12 +796,28 @@ function renderDashboard(){
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
     <div class="panel">
-      <h3>Évolution des anomalies</h3>
-      <div style="height:280px"><canvas id="anomEvolCanvas"></canvas></div>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <h3 style="margin:0">Évolution des anomalies</h3>
+        <select onchange="setEvolPeriod('anom', this.value)">
+          <option value="tout"${anomEvolPeriod==='tout'?' selected':''}>Tout</option>
+          <option value="semaine"${anomEvolPeriod==='semaine'?' selected':''}>Semaines</option>
+          <option value="mois"${anomEvolPeriod==='mois'?' selected':''}>Mois</option>
+          <option value="annee"${anomEvolPeriod==='annee'?' selected':''}>Année</option>
+        </select>
+      </div>
+      <div style="height:280px;margin-top:12px"><canvas id="anomEvolCanvas"></canvas></div>
     </div>
     <div class="panel">
-      <h3>Évolution des ruptures</h3>
-      <div style="height:280px"><canvas id="ruptEvolCanvas"></canvas></div>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <h3 style="margin:0">Évolution des ruptures</h3>
+        <select onchange="setEvolPeriod('rupt', this.value)">
+          <option value="tout"${ruptEvolPeriod==='tout'?' selected':''}>Tout</option>
+          <option value="semaine"${ruptEvolPeriod==='semaine'?' selected':''}>Semaines</option>
+          <option value="mois"${ruptEvolPeriod==='mois'?' selected':''}>Mois</option>
+          <option value="annee"${ruptEvolPeriod==='annee'?' selected':''}>Année</option>
+        </select>
+      </div>
+      <div style="height:280px;margin-top:12px"><canvas id="ruptEvolCanvas"></canvas></div>
     </div>
   </div>`;
 
@@ -856,18 +872,55 @@ function renderDashboard(){
     plugins:[barValuePlugin]
   });
 
+  renderEvolutionCharts();
+}
+
+let anomEvolPeriod = 'tout';
+let ruptEvolPeriod = 'tout';
+function setEvolPeriod(which, period){
+  if(which==='anom') anomEvolPeriod = period; else ruptEvolPeriod = period;
+  renderEvolutionCharts();
+}
+function periodKey(d, period){
+  if(period==='semaine'){
+    const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const dayNum = (tmp.getUTCDay()+6)%7;
+    tmp.setUTCDate(tmp.getUTCDate()-dayNum+3);
+    const firstThursday = new Date(Date.UTC(tmp.getUTCFullYear(),0,4));
+    const weekNo = 1+Math.round(((tmp-firstThursday)/86400000 - 3 + (firstThursday.getUTCDay()+6)%7)/7);
+    return `${tmp.getUTCFullYear()}-S${String(weekNo).padStart(2,'0')}`;
+  }
+  if(period==='mois') return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  if(period==='annee') return `${d.getFullYear()}`;
+  return null;
+}
+function bucketHistoryByPeriod(entriesAsc, period){
+  if(period==='tout') return entriesAsc;
+  const map = new Map();
+  entriesAsc.forEach(e=>{ map.set(periodKey(new Date(e.date), period), e); }); // garde la dernière entrée de chaque période
+  return [...map.values()];
+}
+function evolLabelFor(entry, period){
+  const d = new Date(entry.date);
+  const dd = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getFullYear()).slice(-2)}`;
+  if(period==='tout') return dd;
+  return periodKey(d, period).replace('-S',' S') + ` (${dd})`;
+}
+function renderEvolutionCharts(){
   const histAsc = [...HISTORY_CACHE].sort((a,b)=> new Date(a.date)-new Date(b.date));
-  const evolLabels = histAsc.map(e=>{
-    const d = new Date(e.date);
-    return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getFullYear()).slice(-2)}`;
-  });
-  const evolAnomalies = histAsc.map(e=> e.anomalies||0);
-  const evolRuptures = histAsc.map(e=> ruptureCountForRows(e.data||[]));
+
+  const anomEntries = bucketHistoryByPeriod(histAsc, anomEvolPeriod);
+  const anomLabels = anomEntries.map(e=>evolLabelFor(e, anomEvolPeriod));
+  const evolAnomalies = anomEntries.map(e=> e.anomalies||0);
+
+  const ruptEntries = bucketHistoryByPeriod(histAsc, ruptEvolPeriod);
+  const ruptLabels = ruptEntries.map(e=>evolLabelFor(e, ruptEvolPeriod));
+  const evolRuptures = ruptEntries.map(e=> ruptureCountForRows(e.data||[]));
 
   if(window.__anomEvolChart) window.__anomEvolChart.destroy();
   window.__anomEvolChart = new Chart(document.getElementById('anomEvolCanvas'), {
     type:'line',
-    data:{ labels:evolLabels, datasets:[{
+    data:{ labels:anomLabels, datasets:[{
       data:evolAnomalies, borderColor:'#d98200', backgroundColor:'rgba(217,130,0,0.12)',
       fill:true, tension:0.25, pointRadius:3, pointBackgroundColor:'#d98200'
     }]},
@@ -881,7 +934,7 @@ function renderDashboard(){
   if(window.__ruptEvolChart) window.__ruptEvolChart.destroy();
   window.__ruptEvolChart = new Chart(document.getElementById('ruptEvolCanvas'), {
     type:'line',
-    data:{ labels:evolLabels, datasets:[{
+    data:{ labels:ruptLabels, datasets:[{
       data:evolRuptures, borderColor:'#c62828', backgroundColor:'rgba(198,40,40,0.12)',
       fill:true, tension:0.25, pointRadius:3, pointBackgroundColor:'#c62828'
     }]},
