@@ -160,6 +160,33 @@ tr:hover td{background:#f7fafd}
 <div id="modalRoot"></div>
 
 <script>
+// ---------- AUTO-MISE À JOUR ----------
+// Service worker (uniquement pour piloter le rechargement, aucune mise en cache)
+// + vérification périodique d'une nouvelle version déployée (via l'en-tête ETag
+// de la page), pour recharger automatiquement sans que l'utilisateur ait à faire F5.
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  let swRefreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+    if(swRefreshing) return;
+    swRefreshing = true;
+    location.reload();
+  });
+}
+let PAGE_VERSION_TAG = null;
+async function checkForNewVersion(){
+  try{
+    const res = await fetch(location.pathname, {method:'HEAD', cache:'no-store'});
+    const tag = res.headers.get('etag') || res.headers.get('last-modified');
+    if(!tag) return;
+    if(PAGE_VERSION_TAG === null){ PAGE_VERSION_TAG = tag; return; }
+    if(tag !== PAGE_VERSION_TAG) location.reload();
+  }catch(e){ /* pas de connexion, on réessaiera au prochain tick */ }
+}
+checkForNewVersion();
+setInterval(checkForNewVersion, 45000);
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) checkForNewVersion(); });
+
 // ---------- SUPABASE ----------
 // Renseigner ces deux valeurs depuis Project Settings > API sur supabase.com,
 // puis créer les tables via le SQL fourni (voir supabase_schema.sql).
