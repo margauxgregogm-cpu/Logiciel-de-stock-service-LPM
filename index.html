@@ -734,12 +734,19 @@ function gammeCounts(){
 
 // ---------- DASHBOARD ----------
 let modalHeaders = [], modalAllRows = [];
+let modalBackStack = [];
+function pushModalBack(fn){ modalBackStack.push(fn); }
+function modalGoBack(){ const fn = modalBackStack.pop(); if(fn) fn(); }
+function backButtonHtml(){
+  return modalBackStack.length>0 ? `<button onclick="modalGoBack()" title="Retour" style="min-height:32px;padding:6px 12px">← Retour</button>` : '';
+}
+
 function openModal(title, headers, rows){
   modalHeaders = headers; modalAllRows = rows;
   const root = document.getElementById('modalRoot');
   root.innerHTML = `<div class="modal-bg" onclick="if(event.target===this) closeModal()">
     <div class="modal">
-      <div class="modal-head"><h3>${title}</h3>
+      <div class="modal-head">${backButtonHtml()}<h3>${title}</h3>
         <input id="modalSearch" placeholder="Rechercher..." style="width:220px" oninput="updateModalTable(this.value)">
         <span class="count-pill" id="modalCountPill"></span>
         <button onclick="closeModal()">Fermer</button></div>
@@ -759,15 +766,15 @@ function updateModalTable(q){
   tbody.innerHTML = rows.slice(0,1000).map(r=>`<tr>${modalHeaders.map(h=>`<td>${r[h]!==undefined?r[h]:''}</td>`).join('')}</tr>`).join('');
   document.getElementById('modalMoreNote').textContent = rows.length>1000 ? `Affichage limité aux 1000 premières lignes (sur ${rows.length}).` : '';
 }
-function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
+function closeModal(){ document.getElementById('modalRoot').innerHTML=''; modalBackStack = []; }
 
-let bandAllList = [], bandClickable = false;
+let bandAllList = [], bandClickable = false, currentBandTitle = '';
 function openBandModal(title, list, clickable){
-  bandAllList = list; bandClickable = clickable;
+  bandAllList = list; bandClickable = clickable; currentBandTitle = title;
   const root = document.getElementById('modalRoot');
   root.innerHTML = `<div class="modal-bg" onclick="if(event.target===this) closeModal()">
     <div class="modal">
-      <div class="modal-head"><h3>${title}</h3>
+      <div class="modal-head">${backButtonHtml()}<h3>${title}</h3>
         <input id="bandSearch" placeholder="Rechercher un produit..." style="width:220px" oninput="updateBandTable(this.value)">
         <span class="count-pill" id="bandCountPill"></span>
         <button onclick="closeModal()">Fermer</button></div>
@@ -794,6 +801,7 @@ function updateBandTable(q){
 
 function showProductDetail(produit){
   const rows = RAW_ROWS.filter(r=>r.PRODUIT===produit && r.STATUT==='STOCK KUBE');
+  pushModalBack(()=> openBandModal(currentBandTitle, bandAllList, bandClickable));
   openModal(`Détail — ${produit} (STOCK KUBE)`, UI_COLS, rows);
 }
 
