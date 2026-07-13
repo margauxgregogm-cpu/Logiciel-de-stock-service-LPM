@@ -352,6 +352,7 @@ function renderHistorique(){
               <td style="display:flex;gap:8px;align-items:center">
                 <button onclick="openHistoryEntry('${entry.id}')">Ouvrir</button>
                 <button onclick="downloadHistoryEntry('${entry.id}')">Télécharger</button>
+                <button onclick="deleteHistoryEntry('${entry.id}')" style="color:var(--red)">Supprimer</button>
                 ${isActive?'<span class="pill" style="background:#e3f3e4;color:var(--green)">actif</span>':''}
               </td>
             </tr>`;
@@ -384,6 +385,27 @@ function downloadHistoryEntry(id){
   if(!entry) return;
   const base = entry.filename.replace(/\.[^.]+$/,'');
   exportEtatDesStocksFor(entry.data, `${base}.xlsx`, new Date(entry.date));
+}
+async function deleteHistoryEntry(id){
+  const entry = HISTORY_CACHE.find(e=>e.id===id);
+  if(!entry) return;
+  if(!confirm(`Supprimer l'import "${entry.filename}" de l'historique ?`)) return;
+  HISTORY_CACHE = HISTORY_CACHE.filter(e=>e.id!==id);
+  saveLocalHistory(HISTORY_CACHE);
+  if(sb){
+    try{
+      const {error} = await sb.from('import_history').delete().eq('id', id);
+      if(error) throw error;
+    }catch(e){
+      console.warn('Échec de la suppression Supabase (historique) :', e);
+    }
+  }
+  if(currentHistoryId===id){
+    currentHistoryId = null;
+    if(HISTORY_CACHE.length>0) openHistoryEntry(HISTORY_CACHE[0].id);
+    else { RAW_ROWS = []; ANOMALIES = []; showEmptyState(); }
+  }
+  renderHistorique();
 }
 
 // ---------- ANOMALIES ----------
