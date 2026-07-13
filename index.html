@@ -44,8 +44,8 @@ input,select{border:1px solid var(--line);background:#fff;border-radius:6px;min-
 .topbar .actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .topbar .spacer{flex:1}
 .content{padding:22px;flex:1}
-.kpi-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:9px;margin-bottom:20px}
-.kpi-grid .kpi{min-width:0}
+.kpi-grid{display:flex;gap:9px;margin-bottom:20px;overflow-x:auto;padding-bottom:4px}
+.kpi-grid .kpi{min-width:140px;flex:0 0 140px}
 .kpi{background:var(--panel);border:1px solid var(--line);border-left:3px solid #9aa7b6;border-radius:9px;padding:11px 11px;box-shadow:0 1px 3px rgba(36,32,73,.06);cursor:pointer;transition:.12s;overflow:hidden}
 .kpi:hover{transform:translateY(-2px);box-shadow:0 3px 10px rgba(36,32,73,.1)}
 .kpi .kv{font-size:19px;font-weight:800;color:var(--ink);line-height:1.1}
@@ -834,7 +834,7 @@ function renderDashboard(){
   el.innerHTML = `
   <div class="panel" style="padding:12px 16px;margin-bottom:14px">
     <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 6px">Stock par gamme à Kube Design (HS exclus)</h3>
-    <div style="height:380px;max-width:800px;margin:0 auto"><canvas id="gammeCanvas"></canvas></div>
+    <div style="height:380px"><canvas id="gammeCanvas"></canvas></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
     <div class="panel" style="padding:12px 16px;margin-bottom:0">
