@@ -348,7 +348,14 @@ async function loadHistoryFromSupabase(){
 // colonne "data" peut être volumineuse (gros imports) et dépasser la limite
 // de taille de Supabase Realtime, donc le message reçu n'est qu'un signal :
 // on va toujours rechercher les données fraîches via une requête normale.
+// Empêche la synchro temps réel d'écraser le cache local pendant qu'un
+// import ou une suppression est en cours d'écriture sur ce même poste :
+// sinon un évènement Realtime/sondage peut arriver entre la mise à jour
+// locale (optimiste) et la confirmation Supabase, voir un état transitoire
+// incohérent, et provoquer un "flash" retour à l'ancien import.
+let historyWriteInFlight = false;
 async function refreshHistoryFromRemote(){
+  if(historyWriteInFlight) return;
   const previousLatestId = HISTORY_CACHE[0] ? HISTORY_CACHE[0].id : null;
   const previousIds = new Set(HISTORY_CACHE.map(e=>e.id));
   await loadHistoryFromSupabase();
@@ -398,6 +405,7 @@ async function addHistoryEntry(){
   saveLocalHistory(HISTORY_CACHE);
   currentHistoryId = entry.id;
   if(sb){
+    historyWriteInFlight = true;
     try{
       const {error} = await sb.from('import_history').insert({
         id: entry.id, imported_at: entry.date, filename: entry.filename,
@@ -406,6 +414,8 @@ async function addHistoryEntry(){
       if(error) throw error;
     }catch(e){
       console.warn('Échec de l\'enregistrement Supabase (historique) :', e);
+    }finally{
+      historyWriteInFlight = false;
     }
   }
 }
@@ -475,11 +485,14 @@ async function deleteHistoryEntry(id){
   HISTORY_CACHE = HISTORY_CACHE.filter(e=>e.id!==id);
   saveLocalHistory(HISTORY_CACHE);
   if(sb){
+    historyWriteInFlight = true;
     try{
       const {error} = await sb.from('import_history').delete().eq('id', id);
       if(error) throw error;
     }catch(e){
       console.warn('Échec de la suppression Supabase (historique) :', e);
+    }finally{
+      historyWriteInFlight = false;
     }
   }
   if(currentHistoryId===id){
