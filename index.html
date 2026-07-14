@@ -103,6 +103,7 @@ tr:hover td{background:#f7fafd}
 .dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
 .small{font-size:11.5px;color:var(--muted)}
 .anomaly-msg{color:var(--red);font-size:12px}
+.qty-circle{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;padding:0 4px;border-radius:50%;border:2px solid var(--blue-2);font-weight:800;color:var(--blue-2)}
 </style>
 </head>
 <body>
@@ -518,14 +519,13 @@ function setEnabledRules(obj){
   syncSettingToSupabase('anomaly_rules', obj);
 }
 
-function computeAnomalies(){
-  ANOMALIES = RAW_ROWS.map(r=>({row:r, messages:[]}));
-  const byIdx = ANOMALIES;
+function computeAnomaliesForRows(rows){
+  const byIdx = rows.map(r=>({row:r, messages:[]}));
 
   // Table N_SERIE -> nom produit, construite à partir des FACTICE déjà nommés
   const nserieToName = {};
   const nserieToNameFreq = {};
-  RAW_ROWS.forEach(r=>{
+  rows.forEach(r=>{
     if(r.TYPE_PRODUIT==='FACTICE' && r.N_SERIE && r.PRODUIT){
       nserieToNameFreq[r.N_SERIE] = nserieToNameFreq[r.N_SERIE] || {};
       nserieToNameFreq[r.N_SERIE][r.PRODUIT] = (nserieToNameFreq[r.N_SERIE][r.PRODUIT]||0)+1;
@@ -538,7 +538,7 @@ function computeAnomalies(){
     nserieToName[ns] = best;
   });
 
-  RAW_ROWS.forEach((r,i)=>{
+  rows.forEach((r,i)=>{
     const msgs = byIdx[i].messages;
 
     // Regle 1: MAGASIN / VOL EN MAGASIN -> champs obligatoires
@@ -597,7 +597,7 @@ function computeAnomalies(){
 
   // Regle 6/7 : cohérence N_SERIE des FACTICE par nom de produit
   const groups = {};
-  RAW_ROWS.forEach((r,i)=>{
+  rows.forEach((r,i)=>{
     if(r.TYPE_PRODUIT==='FACTICE' && r.PRODUIT){
       (groups[r.PRODUIT] = groups[r.PRODUIT] || []).push(i);
     }
@@ -606,7 +606,7 @@ function computeAnomalies(){
     const idxs = groups[pname];
     const freq = {};
     idxs.forEach(i=>{
-      const ns = RAW_ROWS[i].N_SERIE;
+      const ns = rows[i].N_SERIE;
       if(ns) freq[ns] = (freq[ns]||0)+1;
     });
     const keys = Object.keys(freq);
@@ -614,7 +614,7 @@ function computeAnomalies(){
     let majority = keys[0];
     keys.forEach(k=>{ if(freq[k]>freq[majority]) majority = k; });
     idxs.forEach(i=>{
-      const ns = RAW_ROWS[i].N_SERIE;
+      const ns = rows[i].N_SERIE;
       if(!ns){
         byIdx[i].messages.push({rule:'r67', text:`FACTICE "${pname}" : N_SERIE manquant (attendu ${majority} d'après les autres lignes du même produit)`});
       } else if(ns!==majority){
@@ -622,6 +622,14 @@ function computeAnomalies(){
       }
     });
   });
+  return byIdx;
+}
+function computeAnomalies(){
+  ANOMALIES = computeAnomaliesForRows(RAW_ROWS);
+}
+function anomalyCountForRows(rows){
+  const enabled = getEnabledRules();
+  return computeAnomaliesForRows(rows).filter(a=> a.messages.some(m=> enabled[m.rule]!==false)).length;
 }
 
 function anomalyRows(){
@@ -748,13 +756,13 @@ function productBands(){
     const p = resolveProduit(r);
     if(!p) return;
     qty[p] = (qty[p]||0)+1;
-    typesByProduct[p] = typesByProduct[p] || new Set();
-    if(r.TYPE_PRODUIT) typesByProduct[p].add(r.TYPE_PRODUIT);
+    typesByProduct[p] = typesByProduct[p] || {};
+    if(r.TYPE_PRODUIT) typesByProduct[p][r.TYPE_PRODUIT] = (typesByProduct[p][r.TYPE_PRODUIT]||0)+1;
   });
   const list0Raw = [], listUnder10 = [], listUnder30 = [];
   allProducts.forEach(p=>{
     const q = qty[p]||0;
-    const types = [...(typesByProduct[p]||[])];
+    const types = typesByProduct[p]||{};
     if(q===0) list0Raw.push({produit:p, qty:q, types});
     else if(q>=1 && q<10) listUnder10.push({produit:p, qty:q, types});
     else if(q>=10 && q<30) listUnder30.push({produit:p, qty:q, types});
@@ -871,10 +879,11 @@ function updateBandTable(q){
   const tbody = document.getElementById('bandTbody');
   tbody.innerHTML = list.map(item=>{
     const safe = item.produit.replace(/'/g,"\\'");
-    const typeCells = bandWithTypes ? TYPE_COLS.map(t=>`<td style="text-align:center">${(item.types||[]).includes(t)?'✓':''}</td>`).join('') : '';
+    const typeCells = bandWithTypes ? TYPE_COLS.map(t=>`<td style="text-align:center">${(item.types||{})[t]||''}</td>`).join('') : '';
+    const qtyCell = `<td><span class="qty-circle">${item.qty}</span></td>`;
     return bandClickable
-      ? `<tr style="cursor:pointer" onclick="showProductDetail('${safe}')"><td>${item.produit} 🔍</td><td>${item.qty}</td>${typeCells}</tr>`
-      : `<tr><td>${item.produit}</td><td>${item.qty}</td>${typeCells}</tr>`;
+      ? `<tr style="cursor:pointer" onclick="showProductDetail('${safe}')"><td>${item.produit} 🔍</td>${qtyCell}${typeCells}</tr>`
+      : `<tr><td>${item.produit}</td>${qtyCell}${typeCells}</tr>`;
   }).join('');
 }
 
@@ -933,10 +942,11 @@ function filterStockBandTab(key, q){
   document.getElementById(key+'CountPill').innerHTML = `<b>${filtered.length}</b><span>produit(s)</span>`;
   document.getElementById(key+'Tbody').innerHTML = filtered.map(item=>{
     const safe = item.produit.replace(/'/g,"\\'");
-    const typeCells = withTypes ? TYPE_COLS.map(t=>`<td style="text-align:center">${(item.types||[]).includes(t)?'✓':''}</td>`).join('') : '';
+    const typeCells = withTypes ? TYPE_COLS.map(t=>`<td style="text-align:center">${(item.types||{})[t]||''}</td>`).join('') : '';
+    const qtyCell = `<td><span class="qty-circle">${item.qty}</span></td>`;
     return clickable
-      ? `<tr style="cursor:pointer" onclick="showProductDetailPlain('${safe}')"><td>${item.produit} 🔍</td><td>${item.qty}</td>${typeCells}</tr>`
-      : `<tr><td>${item.produit}</td><td>${item.qty}</td>${typeCells}</tr>`;
+      ? `<tr style="cursor:pointer" onclick="showProductDetailPlain('${safe}')"><td>${item.produit} 🔍</td>${qtyCell}${typeCells}</tr>`
+      : `<tr><td>${item.produit}</td>${qtyCell}${typeCells}</tr>`;
   }).join('');
 }
 function renderStock15(){
@@ -1098,24 +1108,29 @@ function periodKey(d, period){
   if(period==='annee') return `${d.getFullYear()}`;
   return null;
 }
+// Date à utiliser pour les graphiques : celle du nom du fichier si on peut
+// l'y trouver (format JJMMAAAA), sinon la date d'import en repli.
+function entryDisplayDate(entry){
+  return extractFileDate(entry.filename||'', new Date(entry.date)).date;
+}
 function bucketHistoryByPeriod(entriesAsc, period){
   if(period==='tout') return entriesAsc;
   const map = new Map();
-  entriesAsc.forEach(e=>{ map.set(periodKey(new Date(e.date), period), e); }); // garde la dernière entrée de chaque période
+  entriesAsc.forEach(e=>{ map.set(periodKey(entryDisplayDate(e), period), e); }); // garde la dernière entrée de chaque période
   return [...map.values()];
 }
 function evolLabelFor(entry, period){
-  const d = new Date(entry.date);
+  const d = entryDisplayDate(entry);
   const dd = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getFullYear()).slice(-2)}`;
   if(period==='tout') return dd;
   return periodKey(d, period).replace('-S',' S') + ` (${dd})`;
 }
 function renderEvolutionCharts(){
-  const histAsc = [...HISTORY_CACHE].sort((a,b)=> new Date(a.date)-new Date(b.date));
+  const histAsc = [...HISTORY_CACHE].sort((a,b)=> entryDisplayDate(a)-entryDisplayDate(b));
 
   const anomEntries = bucketHistoryByPeriod(histAsc, anomEvolPeriod);
   const anomLabels = anomEntries.map(e=>evolLabelFor(e, anomEvolPeriod));
-  const evolAnomalies = anomEntries.map(e=> e.anomalies||0);
+  const evolAnomalies = anomEntries.map(e=> anomalyCountForRows(e.data||[]));
 
   const ruptEntries = bucketHistoryByPeriod(histAsc, ruptEvolPeriod);
   const ruptLabels = ruptEntries.map(e=>evolLabelFor(e, ruptEvolPeriod));
