@@ -920,8 +920,9 @@ function renderStockBandTab(key, list, title, clickable=true, withTypes=false){
   <div class="panel">
     <h3>${title}</h3>
     <div class="toolbar">
-      <input placeholder="Rechercher un produit..." style="width:280px" oninput="filterStockBandTab('${key}', this.value)">
+      <input id="${key}Search" placeholder="Rechercher un produit..." style="width:280px" oninput="filterStockBandTab('${key}', this.value)">
       <span class="count-pill" id="${key}CountPill"></span>
+      ${withTypes ? `<button onclick="exportStockBandCSV('${key}')">Export CSV</button>` : ''}
     </div>
     <div class="table-wrap" style="max-height:640px">
       <table>
@@ -948,6 +949,22 @@ function filterStockBandTab(key, q){
       ? `<tr style="cursor:pointer" onclick="showProductDetailPlain('${safe}')"><td>${item.produit} 🔍</td>${qtyCell}${typeCells}</tr>`
       : `<tr><td>${item.produit}</td>${qtyCell}${typeCells}</tr>`;
   }).join('');
+}
+function exportStockBandCSV(key){
+  const q = (document.getElementById(key+'Search')?.value || '').toUpperCase();
+  const list = stockBandLists[key] || [];
+  const filtered = q ? list.filter(x=>x.produit.toUpperCase().includes(q)) : list;
+  const rows = filtered.map(item=>({
+    'Produit': item.produit,
+    'Qty STOCK KUBE': item.qty,
+    'FACTICE': item.types['FACTICE']||0,
+    'LDU': item.types['LDU']||0,
+    'RDU': item.types['RDU']||0,
+    'RDU LPM': item.types['RDU LPM']||0
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const csv = XLSX.utils.sheet_to_csv(ws, {FS:';'});
+  downloadBlob(csv, key==='stock15' ? 'stock_1_a_10.csv' : 'stock_10_a_30.csv', 'text/csv;charset=utf-8;');
 }
 function renderStock15(){
   const bands = productBands();
