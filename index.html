@@ -954,17 +954,10 @@ function exportStockBandCSV(key){
   const q = (document.getElementById(key+'Search')?.value || '').toUpperCase();
   const list = stockBandLists[key] || [];
   const filtered = q ? list.filter(x=>x.produit.toUpperCase().includes(q)) : list;
-  const rows = filtered.map(item=>({
-    'Produit': item.produit,
-    'Qty STOCK KUBE': item.qty,
-    'FACTICE': item.types['FACTICE']||0,
-    'LDU': item.types['LDU']||0,
-    'RDU': item.types['RDU']||0,
-    'RDU LPM': item.types['RDU LPM']||0
-  }));
-  const ws = XLSX.utils.json_to_sheet(rows);
+  const rows = filtered.flatMap(item=> rowsForProduct(item.produit));
+  const ws = XLSX.utils.json_to_sheet(rows.map(r=>{ const o={}; UI_COLS.forEach(c=>o[c]=r[c]); return o; }));
   const csv = XLSX.utils.sheet_to_csv(ws, {FS:';'});
-  downloadBlob(csv, key==='stock15' ? 'stock_1_a_10.csv' : 'stock_10_a_30.csv', 'text/csv;charset=utf-8;');
+  downloadBlob(csv, key==='stock15' ? 'stock_1_a_10_detail.csv' : 'stock_10_a_30_detail.csv', 'text/csv;charset=utf-8;');
 }
 function renderStock15(){
   const bands = productBands();
