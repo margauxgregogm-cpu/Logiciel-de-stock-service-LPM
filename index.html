@@ -528,8 +528,18 @@ function downloadHistoryEntry(id){
   const list = getImportHistory();
   const entry = list.find(e=>e.id===id);
   if(!entry) return;
-  const base = entry.filename.replace(/\.[^.]+$/,'');
-  exportEtatDesStocksFor(entry.data, `${base}.xlsx`, new Date(entry.date));
+  // Télécharge l'import brut tel qu'il a été importé ce jour-là (et non
+  // l'état des stocks calculé, qui a son propre bouton d'export dédié).
+  const rows = (entry.data||[]).map(r=>{ const o={}; UI_COLS.forEach(c=>o[c]=r[c]); return o; });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  if(/\.csv$/i.test(entry.filename)){
+    const csv = XLSX.utils.sheet_to_csv(ws, {FS:';'});
+    downloadBlob(csv, entry.filename, 'text/csv;charset=utf-8;');
+  } else {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Import');
+    XLSX.writeFile(wb, entry.filename || `import_${entry.id}.xlsx`);
+  }
 }
 async function deleteHistoryEntry(id){
   const entry = HISTORY_CACHE.find(e=>e.id===id);
