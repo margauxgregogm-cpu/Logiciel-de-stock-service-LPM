@@ -1174,7 +1174,8 @@ function renderDashboard(){
   const gammeLabels = gData.map(x=>x.key);
   const gammeFacticeValues = gData.map(x=>x.factice);
   const gammeAutresValues = gData.map(x=>x.autres);
-  document.getElementById('gammeChartInner').style.width = Math.max(900, gData.length * gammeColWidth) + 'px';
+  const gammeWrapWidth = document.getElementById('gammeChartWrap').clientWidth;
+  document.getElementById('gammeChartInner').style.width = Math.max(gammeWrapWidth, gData.length * gammeColWidth) + 'px';
   const gammeCanvas = document.getElementById('gammeCanvas');
   if(window.__gammeChart) window.__gammeChart.destroy();
   window.__gammeChart = new Chart(gammeCanvas, {
@@ -1182,8 +1183,8 @@ function renderDashboard(){
     data:{
       labels:gammeLabels,
       datasets:[
-        {label:'FACTICE', data:gammeFacticeValues, backgroundColor:'#b8d8f0', borderRadius:4, maxBarThickness:28, categoryPercentage:0.6, barPercentage:0.9},
-        {label:'RDU / RDU LPM / LDU', data:gammeAutresValues, backgroundColor:'#0b5cab', borderRadius:4, maxBarThickness:28, categoryPercentage:0.6, barPercentage:0.9}
+        {label:'FACTICE', data:gammeFacticeValues, backgroundColor:'#b8d8f0', borderRadius:4, maxBarThickness:60, categoryPercentage:0.6, barPercentage:0.9},
+        {label:'RDU / RDU LPM / LDU', data:gammeAutresValues, backgroundColor:'#0b5cab', borderRadius:4, maxBarThickness:60, categoryPercentage:0.6, barPercentage:0.9}
       ]
     },
     options:{
@@ -1191,7 +1192,10 @@ function renderDashboard(){
       maintainAspectRatio:false,
       plugins:{ legend:{display:true, position:'top', labels:{font:{size:13}}} },
       scales:{
-        x:{ grid:{display:false}, ticks:{font:{size:11.5}, autoSkip:false, maxRotation:90, minRotation:45} },
+        x:{ grid:{display:false}, ticks: gammeSelectedMarque
+          ? {font:{size:11.5}, autoSkip:false, maxRotation:90, minRotation:45}
+          : {font:{size:12.5}, autoSkip:false, maxRotation:0, minRotation:0}
+        },
         y:{ beginAtZero:true, grace:'12%', grid:{color:'#ece7f8'}, ticks:{font:{size:12}} }
       },
       onHover:(evt, elements, chart)=>{
