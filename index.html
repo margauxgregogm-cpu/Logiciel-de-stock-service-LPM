@@ -887,7 +887,7 @@ function productCounts(){
   const data = [...produits].map(p=>({
     produit:p, factice:factice[p]||0, autres:autres[p]||0, total:(factice[p]||0)+(autres[p]||0)
   }));
-  data.sort((a,b)=>a.produit.localeCompare(b.produit, 'fr', {sensitivity:'base'}));
+  data.sort((a,b)=>b.produit.localeCompare(a.produit, 'fr', {sensitivity:'base'}));
   return data;
 }
 
