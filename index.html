@@ -291,13 +291,25 @@ function handleFile(file){
 }
 
 function extractFileDate(filename, importTs){
-  // Cherche une date au format JJMMAAAA dans le nom du fichier (ex: 13072026)
-  const matches = filename.match(/\d{8}/g) || [];
-  for(const m of matches){
+  // 1) Format JJMMAAAA (8 chiffres, ex: 13072026)
+  const matches8 = filename.match(/\d{8}/g) || [];
+  for(const m of matches8){
     const day = parseInt(m.slice(0,2),10);
     const month = parseInt(m.slice(2,4),10);
     const year = parseInt(m.slice(4,8),10);
     if(day>=1 && day<=31 && month>=1 && month<=12 && year>=2000 && year<=2100){
+      const d = new Date(year, month-1, day);
+      if(d.getMonth()===month-1) return {date:d, source:'filename'};
+    }
+  }
+  // 2) Format JJ-MM sans année (ex: 15-07, "ETAT DES STOCKS 15-07.csv") :
+  // on suppose l'année en cours (celle de importTs).
+  const matchesDM = [...filename.matchAll(/\b(\d{2})-(\d{2})\b/g)];
+  for(const m of matchesDM){
+    const day = parseInt(m[1],10);
+    const month = parseInt(m[2],10);
+    if(day>=1 && day<=31 && month>=1 && month<=12){
+      const year = importTs.getFullYear();
       const d = new Date(year, month-1, day);
       if(d.getMonth()===month-1) return {date:d, source:'filename'};
     }
