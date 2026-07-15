@@ -1080,8 +1080,12 @@ function renderDashboard(){
 
   el.innerHTML = `
   <div class="panel" style="padding:12px 16px;margin-bottom:14px">
-    <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 6px">Stock par gamme à Kube Design (HS exclus)</h3>
-    <div id="gammeChartWrap" style="height:520px;overflow-x:auto;overflow-y:hidden"><div id="gammeChartInner" style="position:relative;height:100%"><canvas id="gammeCanvas"></canvas></div></div>
+    <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 6px">Stock FACTICE à Kube Design (HS exclus)</h3>
+    <div id="gammeFacticeChartWrap" style="height:460px;overflow-x:auto;overflow-y:hidden"><div id="gammeFacticeChartInner" style="position:relative;height:100%"><canvas id="gammeFacticeCanvas"></canvas></div></div>
+  </div>
+  <div class="panel" style="padding:12px 16px;margin-bottom:14px">
+    <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 6px">Stock RDU / RDU LPM / LDU à Kube Design (HS exclus)</h3>
+    <div id="gammeAutresChartWrap" style="height:460px;overflow-x:auto;overflow-y:hidden"><div id="gammeAutresChartInner" style="position:relative;height:100%"><canvas id="gammeAutresCanvas"></canvas></div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
     <div class="panel" style="padding:12px 16px;margin-bottom:0">
@@ -1110,18 +1114,7 @@ function renderDashboard(){
     </div>
   </div>`;
 
-  let gammeChart = window.__gammeChart;
   const gData = productCounts();
-  const gLabels = gData.map(x=>x.produit);
-  const gFactice = gData.map(x=>x.factice);
-  const gAutres = gData.map(x=>x.autres);
-  // Barres verticales : un produit peut donner des dizaines de barres, donc
-  // le canvas grandit en largeur avec le nombre de produits et défile dans
-  // un panneau à hauteur fixe (voir #gammeChartWrap), plutôt que de tasser
-  // des dizaines de colonnes illisibles dans la largeur du panneau.
-  const gammeColWidth = 70;
-  const gammeCanvas = document.getElementById('gammeCanvas');
-  document.getElementById('gammeChartInner').style.width = Math.max(900, gData.length * gammeColWidth) + 'px';
   const whiteBackgroundPlugin = {
     id:'whiteBackgroundPlugin',
     beforeDraw(chart){
@@ -1157,45 +1150,54 @@ function renderDashboard(){
       ctx.restore();
     }
   };
-  if(window.__gammeChart) window.__gammeChart.destroy();
-  window.__gammeChart = new Chart(gammeCanvas, {
-    type:'bar',
-    data:{
-      labels:gLabels,
-      datasets:[
-        {label:'FACTICE', data:gFactice, backgroundColor:'#b8d8f0', borderRadius:4, maxBarThickness:40, categoryPercentage:0.6, barPercentage:0.9},
-        {label:'RDU / RDU LPM / LDU', data:gAutres, backgroundColor:'#0b5cab', borderRadius:4, maxBarThickness:40, categoryPercentage:0.6, barPercentage:0.9}
-      ]
-    },
-    options:{
-      responsive:true,
-      maintainAspectRatio:false,
-      plugins:{ legend:{display:true, position:'top', labels:{font:{size:13}}} },
-      scales:{
-        x:{ stacked:true, grid:{display:false}, ticks:{font:{size:11.5}, autoSkip:false, maxRotation:90, minRotation:45} },
-        y:{ stacked:true, beginAtZero:true, grid:{color:'#ece7f8'}, ticks:{font:{size:12}} }
+  // Barres verticales : un produit peut donner des dizaines de barres, donc
+  // le canvas grandit en largeur avec le nombre de produits et défile dans
+  // un panneau à hauteur fixe, plutôt que de tasser des dizaines de colonnes
+  // illisibles dans la largeur du panneau.
+  const gammeColWidth = 70;
+  function buildGammeChart({wrapId, innerId, canvasId, storeKey, field, color, typeGroup}){
+    const rows = gData.filter(x=>x[field]>0);
+    const labels = rows.map(x=>x.produit);
+    const values = rows.map(x=>x[field]);
+    document.getElementById(innerId).style.width = Math.max(900, rows.length * gammeColWidth) + 'px';
+    const canvas = document.getElementById(canvasId);
+    if(window[storeKey]) window[storeKey].destroy();
+    window[storeKey] = new Chart(canvas, {
+      type:'bar',
+      data:{
+        labels,
+        datasets:[
+          {data:values, backgroundColor:color, borderRadius:4, maxBarThickness:40, categoryPercentage:0.6, barPercentage:0.9}
+        ]
       },
-      onHover:(evt, elements, chart)=>{
-        const rects = chart.$valueLabelRects || [];
-        const hit = rects.some(r=>evt.x>=r.x0 && evt.x<=r.x1 && evt.y>=r.y0 && evt.y<=r.y1);
-        evt.native.target.style.cursor = (elements.length || hit) ? 'pointer' : 'default';
-      },
-      onClick:(evt, elements, chart)=>{
-        const rects = chart.$valueLabelRects || [];
-        const rectHit = rects.find(r=>evt.x>=r.x0 && evt.x<=r.x1 && evt.y>=r.y0 && evt.y<=r.y1);
-        if(rectHit){
-          const typeGroup = rectHit.dsIndex===0 ? 'FACTICE' : 'AUTRES';
-          filterDetailByGamme(gLabels[rectHit.index], typeGroup);
-        } else if(elements.length){
-          const idx = elements[0].index;
-          const dsIndex = elements[0].datasetIndex;
-          const typeGroup = dsIndex===0 ? 'FACTICE' : 'AUTRES';
-          filterDetailByGamme(gLabels[idx], typeGroup);
+      options:{
+        responsive:true,
+        maintainAspectRatio:false,
+        plugins:{ legend:{display:false} },
+        scales:{
+          x:{ grid:{display:false}, ticks:{font:{size:11.5}, autoSkip:false, maxRotation:90, minRotation:45} },
+          y:{ beginAtZero:true, grid:{color:'#ece7f8'}, ticks:{font:{size:12}} }
+        },
+        onHover:(evt, elements, chart)=>{
+          const rects = chart.$valueLabelRects || [];
+          const hit = rects.some(r=>evt.x>=r.x0 && evt.x<=r.x1 && evt.y>=r.y0 && evt.y<=r.y1);
+          evt.native.target.style.cursor = (elements.length || hit) ? 'pointer' : 'default';
+        },
+        onClick:(evt, elements, chart)=>{
+          const rects = chart.$valueLabelRects || [];
+          const rectHit = rects.find(r=>evt.x>=r.x0 && evt.x<=r.x1 && evt.y>=r.y0 && evt.y<=r.y1);
+          if(rectHit){
+            filterDetailByGamme(labels[rectHit.index], typeGroup);
+          } else if(elements.length){
+            filterDetailByGamme(labels[elements[0].index], typeGroup);
+          }
         }
-      }
-    },
-    plugins:[whiteBackgroundPlugin, barValuePlugin]
-  });
+      },
+      plugins:[whiteBackgroundPlugin, barValuePlugin]
+    });
+  }
+  buildGammeChart({wrapId:'gammeFacticeChartWrap', innerId:'gammeFacticeChartInner', canvasId:'gammeFacticeCanvas', storeKey:'__gammeChartFactice', field:'factice', color:'#b8d8f0', typeGroup:'FACTICE'});
+  buildGammeChart({wrapId:'gammeAutresChartWrap', innerId:'gammeAutresChartInner', canvasId:'gammeAutresCanvas', storeKey:'__gammeChartAutres', field:'autres', color:'#0b5cab', typeGroup:'AUTRES'});
 
   renderEvolutionCharts();
 }
