@@ -264,6 +264,7 @@ let ANOMALIES = [];     // {idx,row,messages:[]}
 let fileInfo = {name:'',rows:0,ts:null};
 let currentMarqueFilter = null;
 let currentGammeFilter = null;
+let gammeSelectedMarque = null;
 
 function norm(v){
   if(v===null||v===undefined) return '';
@@ -876,19 +877,28 @@ function marqueCounts(){
   return m;
 }
 
-function productCounts(){
+function gammeGroupCounts(rows, groupField){
   const factice = {}, autres = {};
-  RAW_ROWS.filter(r=>r.STATUT==='STOCK KUBE' && r.PRODUIT).forEach(r=>{
-    const k = r.PRODUIT;
+  rows.filter(r=>r.STATUT==='STOCK KUBE' && r[groupField]).forEach(r=>{
+    const k = r[groupField];
     if(r.TYPE_PRODUIT==='FACTICE') factice[k]=(factice[k]||0)+1;
     else autres[k]=(autres[k]||0)+1;
   });
-  const produits = new Set([...Object.keys(factice), ...Object.keys(autres)]);
-  const data = [...produits].map(p=>({
-    produit:p, factice:factice[p]||0, autres:autres[p]||0, total:(factice[p]||0)+(autres[p]||0)
+  const keys = new Set([...Object.keys(factice), ...Object.keys(autres)]);
+  const data = [...keys].map(k=>({
+    key:k, factice:factice[k]||0, autres:autres[k]||0, total:(factice[k]||0)+(autres[k]||0)
   }));
-  data.sort((a,b)=>b.produit.localeCompare(a.produit, 'fr', {sensitivity:'base'}));
+  data.sort((a,b)=>b.key.localeCompare(a.key, 'fr', {sensitivity:'base'}));
   return data;
+}
+
+function selectGammeMarque(m){
+  gammeSelectedMarque = m;
+  renderDashboard();
+}
+function resetGammeMarque(){
+  gammeSelectedMarque = null;
+  renderDashboard();
 }
 
 // ---------- DASHBOARD ----------
@@ -1078,13 +1088,18 @@ function renderDashboard(){
     </div>
     `;
 
+  const gammeTitleSuffix = gammeSelectedMarque ? ('— '+gammeSelectedMarque) : 'par marque';
+  const gammeBreadcrumb = gammeSelectedMarque
+    ? `<div style="text-align:center;margin-bottom:10px"><button onclick="resetGammeMarque()" style="border:none;background:#ece7f8;color:#3a3564;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12.5px;font-weight:600">← Toutes les marques</button></div>`
+    : '';
   el.innerHTML = `
+  ${gammeBreadcrumb}
   <div class="panel" style="padding:12px 16px;margin-bottom:14px">
-    <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 6px">Stock FACTICE à Kube Design (HS exclus)</h3>
+    <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 6px">Stock FACTICE ${gammeTitleSuffix} à Kube Design (HS exclus)</h3>
     <div id="gammeFacticeChartWrap" style="height:460px;overflow-x:auto;overflow-y:hidden"><div id="gammeFacticeChartInner" style="position:relative;height:100%"><canvas id="gammeFacticeCanvas"></canvas></div></div>
   </div>
   <div class="panel" style="padding:12px 16px;margin-bottom:14px">
-    <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 6px">Stock RDU / RDU LPM / LDU à Kube Design (HS exclus)</h3>
+    <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 6px">Stock RDU / RDU LPM / LDU ${gammeTitleSuffix} à Kube Design (HS exclus)</h3>
     <div id="gammeAutresChartWrap" style="height:460px;overflow-x:auto;overflow-y:hidden"><div id="gammeAutresChartInner" style="position:relative;height:100%"><canvas id="gammeAutresCanvas"></canvas></div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
@@ -1114,7 +1129,8 @@ function renderDashboard(){
     </div>
   </div>`;
 
-  const gData = productCounts();
+  const gammeGroupRows = gammeSelectedMarque ? RAW_ROWS.filter(r=>r.MARQUE===gammeSelectedMarque) : RAW_ROWS;
+  const gData = gammeGroupCounts(gammeGroupRows, gammeSelectedMarque ? 'PRODUIT' : 'MARQUE');
   const whiteBackgroundPlugin = {
     id:'whiteBackgroundPlugin',
     beforeDraw(chart){
@@ -1157,7 +1173,7 @@ function renderDashboard(){
   const gammeColWidth = 70;
   function buildGammeChart({wrapId, innerId, canvasId, storeKey, field, color, typeGroup}){
     const rows = gData.filter(x=>x[field]>0);
-    const labels = rows.map(x=>x.produit);
+    const labels = rows.map(x=>x.key);
     const values = rows.map(x=>x[field]);
     document.getElementById(innerId).style.width = Math.max(900, rows.length * gammeColWidth) + 'px';
     const canvas = document.getElementById(canvasId);
@@ -1186,11 +1202,10 @@ function renderDashboard(){
         onClick:(evt, elements, chart)=>{
           const rects = chart.$valueLabelRects || [];
           const rectHit = rects.find(r=>evt.x>=r.x0 && evt.x<=r.x1 && evt.y>=r.y0 && evt.y<=r.y1);
-          if(rectHit){
-            filterDetailByGamme(labels[rectHit.index], typeGroup);
-          } else if(elements.length){
-            filterDetailByGamme(labels[elements[0].index], typeGroup);
-          }
+          const idx = rectHit ? rectHit.index : (elements.length ? elements[0].index : null);
+          if(idx===null) return;
+          if(gammeSelectedMarque) filterDetailByGamme(labels[idx], typeGroup);
+          else selectGammeMarque(labels[idx]);
         }
       },
       plugins:[whiteBackgroundPlugin, barValuePlugin]
