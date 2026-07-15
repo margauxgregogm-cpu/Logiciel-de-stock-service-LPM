@@ -1141,13 +1141,19 @@ function renderDashboard(){
       ctx.fillStyle = '#3a3564';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
+      const rects = [];
       chart.data.datasets.forEach((ds,dsIdx)=>{
         if(!chart.isDatasetVisible(dsIdx)) return;
         chart.getDatasetMeta(dsIdx).data.forEach((bar,i)=>{
           const v = ds.data[i];
-          if(v) ctx.fillText(v, bar.x + 6, bar.y);
+          if(v){
+            ctx.fillText(v, bar.x + 6, bar.y);
+            const w = ctx.measureText(String(v)).width;
+            rects.push({dsIndex:dsIdx, index:i, x0:bar.x+6-4, x1:bar.x+6+w+4, y0:bar.y-10, y1:bar.y+10});
+          }
         });
       });
+      chart.$valueLabelRects = rects;
       ctx.restore();
     }
   };
@@ -1170,9 +1176,18 @@ function renderDashboard(){
         x:{ beginAtZero:true, grid:{color:'#ece7f8'}, ticks:{font:{size:12}} },
         y:{ grid:{display:false}, ticks:{font:{size:12.5}} }
       },
-      onHover:(evt, elements)=>{ evt.native.target.style.cursor = elements.length ? 'pointer' : 'default'; },
-      onClick:(evt, elements)=>{
-        if(elements.length){
+      onHover:(evt, elements, chart)=>{
+        const rects = chart.$valueLabelRects || [];
+        const hit = rects.some(r=>evt.x>=r.x0 && evt.x<=r.x1 && evt.y>=r.y0 && evt.y<=r.y1);
+        evt.native.target.style.cursor = (elements.length || hit) ? 'pointer' : 'default';
+      },
+      onClick:(evt, elements, chart)=>{
+        const rects = chart.$valueLabelRects || [];
+        const rectHit = rects.find(r=>evt.x>=r.x0 && evt.x<=r.x1 && evt.y>=r.y0 && evt.y<=r.y1);
+        if(rectHit){
+          const typeGroup = rectHit.dsIndex===0 ? 'FACTICE' : 'AUTRES';
+          filterDetailByGamme(gLabels[rectHit.index], typeGroup);
+        } else if(elements.length){
           const idx = elements[0].index;
           const dsIndex = elements[0].datasetIndex;
           const typeGroup = dsIndex===0 ? 'FACTICE' : 'AUTRES';
