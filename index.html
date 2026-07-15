@@ -888,7 +888,7 @@ function gammeGroupCounts(rows, groupField){
   const data = [...keys].map(k=>({
     key:k, factice:factice[k]||0, autres:autres[k]||0, total:(factice[k]||0)+(autres[k]||0)
   }));
-  data.sort((a,b)=>b.key.localeCompare(a.key, 'fr', {sensitivity:'base'}));
+  data.sort((a,b)=>a.key.localeCompare(b.key, 'fr', {sensitivity:'base'}));
   return data;
 }
 
@@ -1089,13 +1089,17 @@ function renderDashboard(){
     `;
 
   const gammeTitleSuffix = gammeSelectedMarque ? ('— '+gammeSelectedMarque) : 'par gamme';
+  const gammeHint = gammeSelectedMarque
+    ? 'Cliquez sur un produit (barre ou nombre) pour voir son détail'
+    : 'Cliquez sur une marque (barre ou nombre) pour voir le détail par produit';
   const gammeBreadcrumb = gammeSelectedMarque
     ? `<div style="text-align:center;margin-bottom:10px"><button onclick="resetGammeMarque()" style="border:none;background:#ece7f8;color:#3a3564;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12.5px;font-weight:600">← Toutes les marques</button></div>`
     : '';
   el.innerHTML = `
   ${gammeBreadcrumb}
   <div class="panel" style="padding:12px 16px;margin-bottom:14px">
-    <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 6px">Stock ${gammeTitleSuffix} à Kube Design (HS exclus)</h3>
+    <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 4px">Stock ${gammeTitleSuffix} à Kube Design (HS exclus)</h3>
+    <div style="text-align:center;color:#6b6690;font-size:12.5px;margin-bottom:6px">${gammeHint}</div>
     <div id="gammeChartWrap" style="height:460px;overflow-x:auto;overflow-y:hidden"><div id="gammeChartInner" style="position:relative;height:100%"><canvas id="gammeCanvas"></canvas></div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
