@@ -413,15 +413,22 @@ async function refreshHistoryFromRemote(){
   const previousIds = new Set(HISTORY_CACHE.map(e=>e.id));
   await loadHistoryFromSupabase();
   const stillActiveExists = HISTORY_CACHE.some(e=>e.id===currentHistoryId);
+  let fullyRerendered = false;
   if(currentHistoryId && !stillActiveExists){
     // l'import affiché a été supprimé ailleurs
     currentHistoryId = null;
-    if(HISTORY_CACHE.length>0) openHistoryEntry(HISTORY_CACHE[0].id);
+    if(HISTORY_CACHE.length>0){ openHistoryEntry(HISTORY_CACHE[0].id); }
     else { RAW_ROWS = []; ANOMALIES = []; showEmptyState(); }
+    fullyRerendered = true;
   } else if(HISTORY_CACHE.length>0 && HISTORY_CACHE[0].id!==previousLatestId && !previousIds.has(HISTORY_CACHE[0].id)){
     // un nouvel import est arrivé ailleurs : on l'affiche
     openHistoryEntry(HISTORY_CACHE[0].id);
+    fullyRerendered = true;
   }
+  // Les graphiques d'évolution agrègent tout l'historique : même quand
+  // l'import affiché ne change pas (ex: suppression d'un ancien import
+  // ailleurs), ils doivent être rafraîchis pour rester exacts partout.
+  if(!fullyRerendered) renderEvolutionCharts();
   const histTab = document.getElementById('tab-historique');
   if(histTab && !histTab.classList.contains('hide')) renderHistorique();
 }
@@ -1212,6 +1219,7 @@ function evolLabelFor(entry, period){
   return periodKey(d, period).replace('-S',' S') + ` (${dd})`;
 }
 function renderEvolutionCharts(){
+  if(!document.getElementById('anomEvolCanvas') || !document.getElementById('ruptEvolCanvas')) return;
   const histAsc = [...HISTORY_CACHE].sort((a,b)=> entryDisplayDate(a)-entryDisplayDate(b));
 
   const anomEntries = bucketHistoryByPeriod(histAsc, anomEvolPeriod);
