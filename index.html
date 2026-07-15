@@ -876,36 +876,16 @@ function marqueCounts(){
   return m;
 }
 
-function deriveGamme(produit){
-  const p = (produit||'').toUpperCase();
-  if(!p) return 'AUTRES';
-  if(p.includes('GALAXY S')) return 'GALAXY S SERIES';
-  if(p.includes('GALAXY Z')) return 'GALAXY Z SERIES';
-  if(p.includes('GALAXY A')) return 'GALAXY A SERIES';
-  if(p.includes('BUDS')) return 'BUDS';
-  if(p.includes('WATCH')) return 'WATCH';
-  if(p.includes('TAB')) return 'TAB';
-  if(p.includes('BOOK')) return 'BOOK';
-  if(p.includes('XCOVER')) return 'XCOVER';
-  if(p.includes('REDMI') || p.startsWith('XIAOMI')) return 'XIAOMI';
-  if(p.includes('MOTOROLA') || p.includes('MOTO ')) return 'MOTOROLA';
-  if(p.includes('IPHONE')) return 'IPHONE';
-  if(p.includes('DORO')) return 'DORO';
-  if(p.includes('BBOX') || p.includes('DECODEUR') || p.includes('BOX SFR')) return 'BOX / DÉCODEUR';
-  if(p.includes('LEVA')) return 'LEVA';
-  if(p.includes('THE PHONE')) return 'THE PHONE';
-  return 'AUTRES';
-}
-function gammeCounts(){
+function productCounts(){
   const factice = {}, autres = {};
   RAW_ROWS.filter(r=>r.STATUT==='STOCK KUBE' && r.PRODUIT).forEach(r=>{
-    const k = deriveGamme(r.PRODUIT);
+    const k = r.PRODUIT;
     if(r.TYPE_PRODUIT==='FACTICE') factice[k]=(factice[k]||0)+1;
     else autres[k]=(autres[k]||0)+1;
   });
-  const gammes = new Set([...Object.keys(factice), ...Object.keys(autres)]);
-  const data = [...gammes].map(g=>({
-    gamme:g, factice:factice[g]||0, autres:autres[g]||0, total:(factice[g]||0)+(autres[g]||0)
+  const produits = new Set([...Object.keys(factice), ...Object.keys(autres)]);
+  const data = [...produits].map(p=>({
+    produit:p, factice:factice[p]||0, autres:autres[p]||0, total:(factice[p]||0)+(autres[p]||0)
   }));
   data.sort((a,b)=>b.total-a.total);
   return data;
@@ -1101,7 +1081,7 @@ function renderDashboard(){
   el.innerHTML = `
   <div class="panel" style="padding:12px 16px;margin-bottom:14px">
     <h3 style="text-align:center;border-left:none;padding-left:0;margin:0 0 6px">Stock par gamme à Kube Design (HS exclus)</h3>
-    <div style="height:380px"><canvas id="gammeCanvas"></canvas></div>
+    <div id="gammeChartWrap" style="height:380px;overflow-y:auto;overflow-x:hidden"><div id="gammeChartInner" style="position:relative;width:100%"><canvas id="gammeCanvas"></canvas></div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
     <div class="panel" style="padding:12px 16px;margin-bottom:0">
@@ -1131,10 +1111,17 @@ function renderDashboard(){
   </div>`;
 
   let gammeChart = window.__gammeChart;
-  const gData = gammeCounts();
-  const gLabels = gData.map(x=>x.gamme);
+  const gData = productCounts();
+  const gLabels = gData.map(x=>x.produit);
   const gFactice = gData.map(x=>x.factice);
   const gAutres = gData.map(x=>x.autres);
+  // Barres horizontales : un produit peut donner des dizaines de barres, donc
+  // le canvas grandit avec le nombre de produits et défile dans un panneau à
+  // hauteur fixe (voir #gammeChartWrap), plutôt que de tasser des dizaines de
+  // barres verticales illisibles dans la largeur du panneau.
+  const gammeRowHeight = 24;
+  const gammeCanvas = document.getElementById('gammeCanvas');
+  document.getElementById('gammeChartInner').style.height = Math.max(340, gData.length * gammeRowHeight) + 'px';
   const whiteBackgroundPlugin = {
     id:'whiteBackgroundPlugin',
     beforeDraw(chart){
@@ -1152,32 +1139,34 @@ function renderDashboard(){
       ctx.save();
       ctx.font = 'bold 11px Segoe UI, Arial';
       ctx.fillStyle = '#3a3564';
-      ctx.textAlign = 'center';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
       chart.data.datasets.forEach((ds,dsIdx)=>{
         if(!chart.isDatasetVisible(dsIdx)) return;
         chart.getDatasetMeta(dsIdx).data.forEach((bar,i)=>{
           const v = ds.data[i];
-          if(v) ctx.fillText(v, bar.x, bar.y - 5);
+          if(v) ctx.fillText(v, bar.x + 5, bar.y);
         });
       });
       ctx.restore();
     }
   };
   if(window.__gammeChart) window.__gammeChart.destroy();
-  window.__gammeChart = new Chart(document.getElementById('gammeCanvas'), {
+  window.__gammeChart = new Chart(gammeCanvas, {
     type:'bar',
     data:{
       labels:gLabels,
       datasets:[
-        {label:'FACTICE', data:gFactice, backgroundColor:'#b8d8f0', borderRadius:3, maxBarThickness:55, categoryPercentage:0.7, barPercentage:0.95},
-        {label:'RDU / RDU LPM / LDU', data:gAutres, backgroundColor:'#0b5cab', borderRadius:3, maxBarThickness:55, categoryPercentage:0.7, barPercentage:0.95}
+        {label:'FACTICE', data:gFactice, backgroundColor:'#b8d8f0', borderRadius:3, maxBarThickness:16, categoryPercentage:0.8, barPercentage:0.9},
+        {label:'RDU / RDU LPM / LDU', data:gAutres, backgroundColor:'#0b5cab', borderRadius:3, maxBarThickness:16, categoryPercentage:0.8, barPercentage:0.9}
       ]
     },
     options:{
+      indexAxis:'y',
       responsive:true,
       maintainAspectRatio:false,
       plugins:{ legend:{display:true, position:'top'} },
-      scales:{ y:{ beginAtZero:true, grid:{color:'#ece7f8'} }, x:{ grid:{display:false} } },
+      scales:{ x:{ beginAtZero:true, grid:{color:'#ece7f8'} }, y:{ grid:{display:false} } },
       onHover:(evt, elements)=>{ evt.native.target.style.cursor = elements.length ? 'pointer' : 'default'; },
       onClick:(evt, elements)=>{
         if(elements.length){
@@ -1332,7 +1321,7 @@ function rowMatchesQuery(r, q){
   if(!q) return true;
   const norm = s => String(s||'').toUpperCase().replace(/\s+/g,'');
   const qn = norm(q);
-  const hay = UI_COLS.map(c=>String(r[c]||'')).join(' ') + ' ' + deriveGamme(r.PRODUIT);
+  const hay = UI_COLS.map(c=>String(r[c]||'')).join(' ');
   return norm(hay).includes(qn);
 }
 function renderDetailTable(){
@@ -1342,7 +1331,7 @@ function renderDetailTable(){
   const pill = document.getElementById('marqueFilterPill');
   const parts = [];
   if(currentMarqueFilter) parts.push('Marque: '+currentMarqueFilter);
-  if(currentGammeFilter) parts.push('Gamme: '+currentGammeFilter+(currentTypeGroupFilter?' ('+currentTypeGroupFilter+')':''));
+  if(currentGammeFilter) parts.push('Produit: '+currentGammeFilter+(currentTypeGroupFilter?' ('+currentTypeGroupFilter+')':''));
   if(parts.length){ pill.classList.remove('hide'); pill.textContent = parts.join(' · '); }
   else pill.classList.add('hide');
 
@@ -1351,7 +1340,7 @@ function renderDetailTable(){
 
   let rows = RAW_ROWS;
   if(currentMarqueFilter) rows = rows.filter(r=>r.MARQUE===currentMarqueFilter);
-  if(currentGammeFilter) rows = rows.filter(r=>deriveGamme(r.PRODUIT)===currentGammeFilter);
+  if(currentGammeFilter) rows = rows.filter(r=>r.PRODUIT===currentGammeFilter);
   if(currentTypeGroupFilter==='FACTICE') rows = rows.filter(r=>r.TYPE_PRODUIT==='FACTICE');
   else if(currentTypeGroupFilter==='AUTRES') rows = rows.filter(r=>r.TYPE_PRODUIT!=='FACTICE');
   if(st) rows = rows.filter(r=>r.STATUT===st);
@@ -1374,7 +1363,7 @@ function exportCurrentTableCSV(){
   const ty = document.getElementById('filterType').value;
   let rows = RAW_ROWS;
   if(currentMarqueFilter) rows = rows.filter(r=>r.MARQUE===currentMarqueFilter);
-  if(currentGammeFilter) rows = rows.filter(r=>deriveGamme(r.PRODUIT)===currentGammeFilter);
+  if(currentGammeFilter) rows = rows.filter(r=>r.PRODUIT===currentGammeFilter);
   if(currentTypeGroupFilter==='FACTICE') rows = rows.filter(r=>r.TYPE_PRODUIT==='FACTICE');
   else if(currentTypeGroupFilter==='AUTRES') rows = rows.filter(r=>r.TYPE_PRODUIT!=='FACTICE');
   if(st) rows = rows.filter(r=>r.STATUT===st);
