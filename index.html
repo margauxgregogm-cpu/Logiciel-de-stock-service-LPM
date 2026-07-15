@@ -153,7 +153,7 @@ tr:hover td{background:#f7fafd}
         <button class="primary" onclick="exportEtatDesStocks()">Export État des stocks (Excel)</button>
         <button class="primary" onclick="document.getElementById('fileInput2').click()">Nouvel import</button>
         <input type="file" id="fileInput2" accept=".csv,.xlsx,.xls" class="hide">
-        <button id="installBtn" class="hide" onclick="installApp()">📥 Télécharger le logiciel</button>
+        <button id="installBtn" class="primary" onclick="installApp()">📥 Télécharger le logiciel</button>
       </div>
       <div id="importStatusBanner"></div>
       <div class="kpi-grid" id="topKpiGrid"></div>
@@ -198,25 +198,36 @@ if('serviceWorker' in navigator){
 }
 
 // ---------- INSTALLATION PWA ----------
-// Affiche le bouton "Télécharger le logiciel" uniquement quand le navigateur
-// signale que l'application est installable (Chrome/Edge), et masque le
-// bouton si l'app est déjà installée (mode standalone).
+// Le bouton "Télécharger le logiciel" est toujours visible (le navigateur ne
+// signale pas toujours de façon fiable l'installabilité). S'il capte
+// l'évènement natif, il déclenche l'installation ; sinon il explique comment
+// installer manuellement. Masqué uniquement si l'app est déjà installée.
 let deferredInstallPrompt = null;
 window.addEventListener('beforeinstallprompt', (e)=>{
   e.preventDefault();
   deferredInstallPrompt = e;
-  document.getElementById('installBtn').classList.remove('hide');
 });
 window.addEventListener('appinstalled', ()=>{
   deferredInstallPrompt = null;
   document.getElementById('installBtn').classList.add('hide');
 });
 async function installApp(){
-  if(!deferredInstallPrompt) return;
-  deferredInstallPrompt.prompt();
-  await deferredInstallPrompt.userChoice;
-  deferredInstallPrompt = null;
-  document.getElementById('installBtn').classList.add('hide');
+  if(deferredInstallPrompt){
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    return;
+  }
+  const ua = navigator.userAgent;
+  let msg;
+  if(/iPhone|iPad|iPod/.test(ua)){
+    msg = "Sur iPhone/iPad : appuyez sur le bouton Partager de Safari, puis \"Sur l'écran d'accueil\".";
+  } else if(/Android/.test(ua)){
+    msg = "Sur Android : ouvrez le menu ⋮ du navigateur, puis \"Installer l'application\" ou \"Ajouter à l'écran d'accueil\".";
+  } else {
+    msg = "Ouvrez le menu de votre navigateur (souvent ⋮ ou une icône dans la barre d'adresse) et choisissez \"Installer\" ou \"Ajouter à l'écran d'accueil\". Sur Chrome/Edge, une icône d'installation apparaît généralement directement dans la barre d'adresse.";
+  }
+  alert(msg);
 }
 if(window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone){
   document.getElementById('installBtn').classList.add('hide');
