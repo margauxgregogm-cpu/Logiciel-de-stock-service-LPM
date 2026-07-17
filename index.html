@@ -1305,6 +1305,15 @@ function filterDetailByGamme(g, typeGroup){
   if(typeGroup) document.getElementById('filterStatut').value = 'STOCK KUBE';
   renderDetailTable();
 }
+function filterDetailByEtat(produit, type){
+  currentGammeFilter = produit;
+  currentTypeGroupFilter = null;
+  showTab('detail');
+  document.getElementById('detailSearch').value='';
+  document.getElementById('filterStatut').value = 'STOCK KUBE';
+  document.getElementById('filterType').value = type || '';
+  renderDetailTable();
+}
 
 // ---------- DETAIL TAB ----------
 let BAND_MAP = {};
@@ -1497,8 +1506,17 @@ function renderEtatTable(q){
   }
   const groupCount = filtered.filter(l=>l.bold).length;
   document.getElementById('etatCountPill').innerHTML = `<b>${groupCount}</b><span>produit(s)</span>`;
+  const esc = s => String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  let curProduit = '';
   document.getElementById('etatTbody').innerHTML =
-    filtered.map(l=>`<tr style="${l.bold?'background:rgba(184,216,240,0.18)':''}"><td style="${l.bold?'font-weight:700':'padding-left:24px;color:var(--muted)'}">${l.label}</td><td style="${l.bold?'font-weight:700':''}">${l.value}</td></tr>`).join('')
+    filtered.map(l=>{
+      if(l.bold) curProduit = l.label;
+      const safeProduit = esc(curProduit);
+      const onclick = l.bold
+        ? `filterDetailByEtat('${safeProduit}')`
+        : `filterDetailByEtat('${safeProduit}','${esc(l.label)}')`;
+      return `<tr style="${l.bold?'background:rgba(184,216,240,0.18);':''}cursor:pointer" onclick="${onclick}"><td style="${l.bold?'font-weight:700':'padding-left:24px;color:var(--muted)'}">${l.label}</td><td style="${l.bold?'font-weight:700':''}">${l.value}</td></tr>`;
+    }).join('')
     + `<tr><td style="font-weight:800">Total ${qn?'(filtré)':'général'}</td><td style="font-weight:800">${shownTotal}</td></tr>`;
 }
 
