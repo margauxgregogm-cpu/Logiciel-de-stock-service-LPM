@@ -567,6 +567,12 @@ function openHistoryEntry(id){
   document.getElementById('fileMeta').textContent = `${fileInfo.name} — ${fileInfo.rows} lignes — importé ${fileInfo.ts.toLocaleString('fr-FR')}`;
   renderImportStatusBanner();
   document.getElementById('topKpiGrid').classList.remove('hide');
+  // Le tableau de bord doit être rendu visible AVANT de (re)construire le
+  // graphique Chart.js : un canvas initialisé dans un conteneur encore
+  // masqué (display:none) se calcule une largeur nulle/incorrecte et ne se
+  // corrige pas tout seul une fois affiché, ce qui donnait un graphique
+  // visuellement casse (barres manquantes) jusqu'au prochain F5.
+  showTab('dashboard');
   renderDashboard();
   renderDetail();
   renderEtat();
@@ -574,7 +580,6 @@ function openHistoryEntry(id){
   renderStock510();
   renderRupture();
   renderAnomalies();
-  showTab('dashboard');
 }
 function downloadHistoryEntry(id){
   const list = getImportHistory();
@@ -1778,6 +1783,16 @@ function showTab(name){
   if(name==='params') renderParams();
   if(name==='ruptureParams') renderRuptureParams();
   if(name==='historique') renderHistorique();
+  // Filet de sécurité : si le tableau de bord a été (re)construit pendant
+  // qu'il était masqué (ex : synchronisation d'un autre poste reçue sur un
+  // autre onglet), les graphiques Chart.js ont pu se calculer une taille
+  // nulle/incorrecte. Un resize() une fois l'onglet réellement visible
+  // corrige cela.
+  if(name==='dashboard'){
+    window.__gammeChart && window.__gammeChart.resize();
+    window.__anomEvolChart && window.__anomEvolChart.resize();
+    window.__ruptEvolChart && window.__ruptEvolChart.resize();
+  }
 }
 document.querySelectorAll('.nav-btn').forEach(b=> b.addEventListener('click', ()=>showTab(b.dataset.tab)));
 
