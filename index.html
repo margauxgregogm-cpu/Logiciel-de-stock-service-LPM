@@ -108,6 +108,8 @@ tr:hover td{background:#f7fafd}
 .small{font-size:11.5px;color:var(--muted)}
 .anomaly-msg{color:var(--red);font-size:12px}
 .qty-circle{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;padding:0 4px;border-radius:50%;border:2px solid var(--blue-2);font-weight:800;color:var(--blue-2)}
+.update-toast{position:fixed;bottom:24px;right:24px;z-index:600;background:var(--blue-2);color:#fff;font-weight:600;font-size:13.5px;padding:12px 18px;border-radius:10px;box-shadow:0 10px 30px rgba(36,32,73,.25);display:flex;align-items:center;gap:9px;transition:opacity .25s,transform .25s;opacity:1;transform:translateY(0)}
+.update-toast.hide{opacity:0;transform:translateY(12px);pointer-events:none}
 .loading-overlay{position:fixed;inset:0;z-index:500;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);background:rgba(248,246,253,.55)}
 .loading-box{background:#fff;border-radius:12px;padding:22px 30px;box-shadow:0 10px 40px rgba(36,32,73,.2);display:flex;flex-direction:column;align-items:center;gap:14px;font-weight:600;color:var(--ink);font-size:13.5px}
 .spinner{width:34px;height:34px;border:4px solid var(--line);border-top-color:var(--blue-2);border-radius:50%;animation:spin .8s linear infinite}
@@ -174,6 +176,8 @@ tr:hover td{background:#f7fafd}
 </div>
 
 <div id="modalRoot"></div>
+
+<div id="updateToast" class="update-toast hide"></div>
 
 <div id="loadingOverlay" class="loading-overlay">
   <div class="loading-box">
@@ -251,6 +255,19 @@ async function checkForNewVersion(){
 checkForNewVersion();
 setInterval(checkForNewVersion, 45000);
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) checkForNewVersion(); });
+
+// Petit avertissement visuel quand les données ou les paramètres viennent
+// d'être synchronisés depuis un autre poste (voir refreshHistoryFromRemote
+// et refreshSettingsFromRemote).
+let updateToastTimer = null;
+function showUpdateToast(message){
+  const el = document.getElementById('updateToast');
+  if(!el) return;
+  el.textContent = message;
+  el.classList.remove('hide');
+  clearTimeout(updateToastTimer);
+  updateToastTimer = setTimeout(()=> el.classList.add('hide'), 3500);
+}
 
 // ---------- SUPABASE ----------
 // Renseigner ces deux valeurs depuis Project Settings > API sur supabase.com,
@@ -430,6 +447,9 @@ async function refreshHistoryFromRemote(){
   const previousLatestId = HISTORY_CACHE[0] ? HISTORY_CACHE[0].id : null;
   const previousIds = new Set(HISTORY_CACHE.map(e=>e.id));
   await loadHistoryFromSupabase();
+  const currentIds = new Set(HISTORY_CACHE.map(e=>e.id));
+  const hasChanged = currentIds.size!==previousIds.size || [...currentIds].some(id=>!previousIds.has(id));
+  if(hasChanged) showUpdateToast('Données mises à jour');
   const stillActiveExists = HISTORY_CACHE.some(e=>e.id===currentHistoryId);
   let fullyRerendered = false;
   if(currentHistoryId && !stillActiveExists){
@@ -793,6 +813,7 @@ async function loadSettingsFromSupabase(){
 // seuls (Realtime + filet de sécurité par sondage toutes les 20 secondes).
 async function refreshSettingsFromRemote(){
   await loadSettingsFromSupabase();
+  showUpdateToast('Paramètres mis à jour');
   renderDashboard();
   renderAnomalies();
   renderRupture();
