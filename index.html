@@ -236,7 +236,12 @@ if(window.matchMedia('(display-mode: standalone)').matches || window.navigator.s
 let PAGE_VERSION_TAG = null;
 async function checkForNewVersion(){
   try{
-    const res = await fetch(location.pathname, {method:'HEAD', cache:'no-store'});
+    // Le paramètre de requête aléatoire est nécessaire pour contourner le
+    // cache CDN de Vercel : {cache:'no-store'} n'empêche que la mise en
+    // cache locale du navigateur, pas celle du CDN, qui peut renvoyer une
+    // réponse HEAD mise en cache (donc une ancienne version) sans passer
+    // par ce contournement, empêchant l'auto-rechargement de se déclencher.
+    const res = await fetch(location.pathname + '?_v=' + Date.now(), {method:'HEAD', cache:'no-store'});
     const tag = res.headers.get('etag') || res.headers.get('last-modified');
     if(!tag) return;
     if(PAGE_VERSION_TAG === null){ PAGE_VERSION_TAG = tag; return; }
