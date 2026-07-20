@@ -536,6 +536,13 @@ function openHistoryEntry(id){
   RAW_ROWS = entry.data;
   fileInfo = {name:entry.filename, rows:entry.data.length, ts:new Date(entry.date)};
   currentHistoryId = entry.id;
+  // Réinitialise les filtres/vues détaillées (drill-down marque, filtres SODA)
+  // pour ne pas garder un état lié à un autre import (ex : une marque
+  // sélectionnée absente de cet import donnerait un graphique vide/trompeur).
+  gammeSelectedMarque = null;
+  currentGammeFilter = null;
+  currentMarqueFilter = null;
+  currentTypeGroupFilter = null;
   computeAnomalies();
   document.getElementById('fileMeta').textContent = `${fileInfo.name} — ${fileInfo.rows} lignes — importé ${fileInfo.ts.toLocaleString('fr-FR')}`;
   renderImportStatusBanner();
