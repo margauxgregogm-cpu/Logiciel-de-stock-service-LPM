@@ -287,6 +287,20 @@ let fileInfo = {name:'',rows:0,ts:null};
 let currentMarqueFilter = null;
 let currentGammeFilter = null;
 let gammeSelectedMarque = null;
+// Un canvas Chart.js (re)construit alors que son conteneur est masque se
+// calcule une taille nulle/incorrecte et ne se corrige pas tout seul une
+// fois affiche (voir showTab). Les appelants qui peuvent s executer pendant
+// que l onglet Tableau de bord n est pas actif (sauvegarde de parametres,
+// synchronisation distante...) doivent passer par requestDashboardRefresh()
+// plutot que d appeler renderDashboard() directement.
+let dashboardStale = false;
+function requestDashboardRefresh(){
+  if(document.getElementById('tab-dashboard').classList.contains('hide')){
+    dashboardStale = true;
+  } else {
+    renderDashboard();
+  }
+}
 
 function norm(v){
   if(v===null||v===undefined) return '';
@@ -780,7 +794,12 @@ function computeAnomaliesForRows(rows){
       const ns = rows[i].N_SERIE;
       if(ns) freq[ns] = (freq[ns]||0)+1;
     });
-    const keys = Object.keys(freq);
+    // Trié par ordre alphabétique pour que le choix du N_SERIE majoritaire
+    // soit déterministe même en cas d'égalité de fréquence : sans ce tri, le
+    // "gagnant" dépendait de l'ordre d'arrivée des lignes (potentiellement
+    // instable d'un chargement à l'autre), ce qui pouvait faire varier le
+    // nombre d'anomalies détectées pour un même fichier (ex: 15 puis 699).
+    const keys = Object.keys(freq).sort();
     if(keys.length===0) return; // aucun N_SERIE dans le groupe, rien à vérifier
     let majority = keys[0];
     keys.forEach(k=>{ if(freq[k]>freq[majority]) majority = k; });
@@ -857,7 +876,7 @@ async function loadSettingsFromSupabase(){
 async function refreshSettingsFromRemote(){
   await loadSettingsFromSupabase();
   showUpdateToast('Paramètres mis à jour');
-  renderDashboard();
+  requestDashboardRefresh();
   renderAnomalies();
   renderRupture();
 }
@@ -1766,7 +1785,7 @@ function saveRuptureParams(){
     else exclusions[p] = true;
   });
   setRuptureExclusions(exclusions);
-  renderDashboard();
+  requestDashboardRefresh();
   const pill = document.getElementById('ruptureParamsSavedPill');
   pill.classList.remove('hide');
   setTimeout(()=> pill.classList.add('hide'), 2500);
@@ -1804,7 +1823,7 @@ function renderParamsList(q){
 }
 function saveAnomalyParams(){
   setEnabledRules(window.__paramsPending);
-  renderDashboard();
+  requestDashboardRefresh();
   renderAnomalies();
   const pill = document.getElementById('paramsSavedPill');
   pill.classList.remove('hide');
@@ -1824,12 +1843,19 @@ function showTab(name){
   // Filet de sécurité : si le tableau de bord a été (re)construit pendant
   // qu'il était masqué (ex : synchronisation d'un autre poste reçue sur un
   // autre onglet), les graphiques Chart.js ont pu se calculer une taille
-  // nulle/incorrecte. Un resize() une fois l'onglet réellement visible
-  // corrige cela.
+  // nulle/incorrecte. Si le tableau de bord a été marqué obsolète pendant
+  // qu'il était masqué (requestDashboardRefresh), on le reconstruit
+  // maintenant qu'il est visible ; sinon un simple resize() suffit à
+  // corriger un éventuel calcul de taille fait pendant qu'il était caché.
   if(name==='dashboard'){
-    window.__gammeChart && window.__gammeChart.resize();
-    window.__anomEvolChart && window.__anomEvolChart.resize();
-    window.__ruptEvolChart && window.__ruptEvolChart.resize();
+    if(dashboardStale){
+      dashboardStale = false;
+      renderDashboard();
+    } else {
+      window.__gammeChart && window.__gammeChart.resize();
+      window.__anomEvolChart && window.__anomEvolChart.resize();
+      window.__ruptEvolChart && window.__ruptEvolChart.resize();
+    }
   }
 }
 document.querySelectorAll('.nav-btn').forEach(b=> b.addEventListener('click', ()=>showTab(b.dataset.tab)));
