@@ -1400,12 +1400,12 @@ function filterDetailByGamme(g, typeGroup){
   if(typeGroup) document.getElementById('filterStatut').value = 'STOCK KUBE';
   renderDetailTable();
 }
-function filterDetailByEtat(produit, type){
+function filterDetailByEtat(produit, type, statut){
   currentGammeFilter = produit;
   currentTypeGroupFilter = null;
   showTab('detail');
   document.getElementById('detailSearch').value='';
-  document.getElementById('filterStatut').value = 'STOCK KUBE';
+  document.getElementById('filterStatut').value = statut || 'STOCK KUBE';
   document.getElementById('filterType').value = type || '';
   renderDetailTable();
 }
@@ -1557,21 +1557,59 @@ function buildEtatPivotFor(rows){
 }
 function buildEtatPivot(){ return buildEtatPivotFor(RAW_ROWS); }
 
+// Page "État des stocks" à l'écran : une colonne de décompte par STATUT
+// (STOCK KUBE, LEGEND SERVICES), chacune avec le même détail par produit /
+// type que buildEtatPivotFor. L'export Excel (buildEtatPivotFor/exportEtatDesStocksFor)
+// n'est pas concerné, il reste sur STOCK KUBE uniquement.
+const ETAT_STATUTS = ['STOCK KUBE', 'LEGEND SERVICES'];
+function buildEtatPivotMulti(rows){
+  const wanted = ['FACTICE','LDU','RDU','RDU LPM'];
+  const nserieToName = buildNserieToNameMap(rows);
+  const byStatutProduct = ETAT_STATUTS.map(statut=>{
+    const byProduct = {};
+    rows.filter(r=>r.STATUT===statut && wanted.includes(r.TYPE_PRODUIT)).forEach(r=>{
+      const label = r.PRODUIT || (r.N_SERIE && nserieToName[r.N_SERIE]) || `PRODUIT SANS NOM (ID ${r.ID}${r.N_SERIE?', N_SERIE '+r.N_SERIE:''})`;
+      byProduct[label] = byProduct[label] || {};
+      byProduct[label][r.TYPE_PRODUIT] = (byProduct[label][r.TYPE_PRODUIT]||0)+1;
+    });
+    return byProduct;
+  });
+  const allProducts = new Set();
+  byStatutProduct.forEach(bp=>Object.keys(bp).forEach(p=>allProducts.add(p)));
+  const products = [...allProducts].sort((a,b)=>a.localeCompare(b));
+  const lines = [];
+  const totals = ETAT_STATUTS.map(()=>0);
+  let num = 0;
+  products.forEach(p=>{
+    const typesPerStatut = byStatutProduct.map(bp=>bp[p]||{});
+    const allTypes = new Set();
+    typesPerStatut.forEach(t=>Object.keys(t).forEach(ty=>allTypes.add(ty)));
+    const subTotals = typesPerStatut.map(t=>Object.values(t).reduce((a,b)=>a+b,0));
+    subTotals.forEach((v,i)=>totals[i]+=v);
+    num++;
+    lines.push({label:p, values:subTotals, bold:true, num});
+    [...allTypes].sort().forEach(ty=>{
+      lines.push({label:ty, values:typesPerStatut.map(t=>t[ty]||0), bold:false, num:null});
+    });
+  });
+  return {lines, totals};
+}
+
 function renderEtat(){
   const el = document.getElementById('tab-etat');
-  const {lines, total} = buildEtatPivot();
+  const {lines, totals} = buildEtatPivotMulti(RAW_ROWS);
   window.__etatLines = lines;
-  window.__etatTotal = total;
+  window.__etatTotals = totals;
   el.innerHTML = `
   <div class="panel">
-    <h3>ETAT DES STOCKS FIN ${weekLabel()} — Statut STOCK KUBE (RDU, RDU LPM, FACTICE, LDU)</h3>
+    <h3>ETAT DES STOCKS FIN ${weekLabel()} — Statut ${ETAT_STATUTS.join(' / ')} (RDU, RDU LPM, FACTICE, LDU)</h3>
     <div class="toolbar">
       <input id="etatSearch" placeholder="Rechercher un produit..." style="width:280px" oninput="renderEtatTable(this.value)">
       <span class="count-pill" id="etatCountPill"></span>
     </div>
     <div class="table-wrap" style="max-height:640px">
       <table>
-        <thead><tr><th>Étiquettes de lignes</th><th>Nombre de STATUT</th></tr></thead>
+        <thead><tr><th>Étiquettes de lignes</th>${ETAT_STATUTS.map(s=>`<th>STATUT ${s}</th>`).join('')}</tr></thead>
         <tbody id="etatTbody"></tbody>
       </table>
     </div>
@@ -1580,15 +1618,14 @@ function renderEtat(){
 }
 function renderEtatTable(q){
   const lines = window.__etatLines;
-  const total = window.__etatTotal;
+  const totals = window.__etatTotals;
   const norm = s => String(s||'').toUpperCase().replace(/\s+/g,'');
   const qn = norm(q);
   let filtered = lines;
-  let shownTotal = total;
+  let shownTotals = totals;
   if(qn){
     filtered = [];
     let keep = false;
-    let groupTotal = 0;
     lines.forEach(l=>{
       if(l.bold){
         keep = norm(l.label).includes(qn);
@@ -1597,7 +1634,7 @@ function renderEtatTable(q){
         filtered.push(l);
       }
     });
-    shownTotal = filtered.filter(l=>l.bold).reduce((a,l)=>a+l.value,0);
+    shownTotals = ETAT_STATUTS.map((_,i)=> filtered.filter(l=>l.bold).reduce((a,l)=>a+l.values[i],0));
   }
   const groupCount = filtered.filter(l=>l.bold).length;
   document.getElementById('etatCountPill').innerHTML = `<b>${groupCount}</b><span>produit(s)</span>`;
@@ -1607,12 +1644,18 @@ function renderEtatTable(q){
     filtered.map(l=>{
       if(l.bold) curProduit = l.label;
       const safeProduit = esc(curProduit);
-      const onclick = l.bold
-        ? `filterDetailByEtat('${safeProduit}')`
-        : `filterDetailByEtat('${safeProduit}','${esc(l.label)}')`;
-      return `<tr style="${l.bold?'background:rgba(184,216,240,0.18);':''}cursor:pointer" onclick="${onclick}"><td style="${l.bold?'font-weight:700':'padding-left:24px;color:var(--muted)'}">${l.label}</td><td style="${l.bold?'font-weight:700':''}">${l.value}</td></tr>`;
+      const cells = ETAT_STATUTS.map((statut,i)=>{
+        const v = l.values[i];
+        const style = l.bold ? 'font-weight:700' : '';
+        if(!v) return `<td style="${style}color:var(--muted)">${v}</td>`;
+        const onclick = l.bold
+          ? `filterDetailByEtat('${safeProduit}', null, '${esc(statut)}')`
+          : `filterDetailByEtat('${safeProduit}','${esc(l.label)}','${esc(statut)}')`;
+        return `<td style="${style}cursor:pointer" onclick="${onclick}">${v}</td>`;
+      }).join('');
+      return `<tr style="${l.bold?'background:rgba(184,216,240,0.18)':''}"><td style="${l.bold?'font-weight:700':'padding-left:24px;color:var(--muted)'}">${l.label}</td>${cells}</tr>`;
     }).join('')
-    + `<tr><td style="font-weight:800">Total ${qn?'(filtré)':'général'}</td><td style="font-weight:800">${shownTotal}</td></tr>`;
+    + `<tr><td style="font-weight:800">Total ${qn?'(filtré)':'général'}</td>${shownTotals.map(t=>`<td style="font-weight:800">${t}</td>`).join('')}</tr>`;
 }
 
 // ---------- ANOMALIES TAB ----------
