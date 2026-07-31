@@ -287,6 +287,20 @@ let fileInfo = {name:'',rows:0,ts:null};
 let currentMarqueFilter = null;
 let currentGammeFilter = null;
 let gammeSelectedMarque = null;
+// Un canvas Chart.js (re)construit alors que son conteneur est masque se
+// calcule une taille nulle/incorrecte et ne se corrige pas tout seul une
+// fois affiche (voir showTab). Les appelants qui peuvent s executer pendant
+// que l onglet Tableau de bord n est pas actif (sauvegarde de parametres,
+// synchronisation distante...) doivent passer par requestDashboardRefresh()
+// plutot que d appeler renderDashboard() directement.
+let dashboardStale = false;
+function requestDashboardRefresh(){
+  if(document.getElementById('tab-dashboard').classList.contains('hide')){
+    dashboardStale = true;
+  } else {
+    renderDashboard();
+  }
+}
 
 function norm(v){
   if(v===null||v===undefined) return '';
@@ -411,23 +425,59 @@ function saveLocalHistory(list){
   try{ localStorage.setItem(HISTORY_KEY, JSON.stringify(list)); }
   catch(e){ console.warn('Historique : espace de stockage local insuffisant, entrée(s) la/les plus ancienne(s) non conservée(s).'); }
 }
+// Ne charge que les métadonnées légères (pas la colonne "data", qui peut
+// représenter des dizaines de Mo cumulés sur 40 imports) : la liste
+// Historique et la détection de changements n'en ont pas besoin. Le
+// contenu complet d'un import n'est chargé qu'à la demande, voir
+// ensureHistoryEntryData()/ensureAllHistoryDataLoaded().
 async function loadHistoryFromSupabase(){
   if(!sb){ HISTORY_CACHE = getLocalHistory(); return; }
   try{
     const {data, error} = await sb
       .from('import_history')
-      .select('*')
+      .select('id, imported_at, filename, rows_count, anomalies_count')
       .order('imported_at', {ascending:false})
       .limit(HISTORY_MAX);
     if(error) throw error;
+    const previousDataById = {};
+    HISTORY_CACHE.forEach(e=>{ if(e.data) previousDataById[e.id] = e.data; });
     HISTORY_CACHE = data.map(row=>({
       id: row.id, date: row.imported_at, filename: row.filename,
-      rows: row.rows_count, anomalies: row.anomalies_count, data: row.data
+      rows: row.rows_count, anomalies: row.anomalies_count,
+      data: previousDataById[row.id] || null
     }));
     saveLocalHistory(HISTORY_CACHE);
   }catch(e){
     console.warn('Supabase indisponible, historique local utilisé.', e);
     HISTORY_CACHE = getLocalHistory();
+  }
+}
+async function ensureHistoryEntryData(id){
+  const entry = HISTORY_CACHE.find(e=>e.id===id);
+  if(!entry || entry.data || !sb) return entry;
+  try{
+    const {data, error} = await sb.from('import_history').select('data').eq('id', id).single();
+    if(error) throw error;
+    entry.data = data.data;
+  }catch(e){
+    console.warn('Échec du chargement du détail de l\'import :', e);
+  }
+  return entry;
+}
+async function ensureAllHistoryDataLoaded(){
+  if(!sb) return false;
+  const missing = HISTORY_CACHE.filter(e=>!e.data).map(e=>e.id);
+  if(missing.length===0) return false;
+  try{
+    const {data, error} = await sb.from('import_history').select('id, data').in('id', missing);
+    if(error) throw error;
+    const byId = {};
+    data.forEach(row=> byId[row.id] = row.data);
+    HISTORY_CACHE.forEach(e=>{ if(byId[e.id]) e.data = byId[e.id]; });
+    return true;
+  }catch(e){
+    console.warn('Échec du chargement complet de l\'historique (graphiques d\'évolution) :', e);
+    return false;
   }
 }
 
@@ -549,10 +599,9 @@ function renderHistorique(){
     </div>
   </div>`;
 }
-function openHistoryEntry(id){
-  const list = getImportHistory();
-  const entry = list.find(e=>e.id===id);
-  if(!entry) return;
+async function openHistoryEntry(id){
+  const entry = await ensureHistoryEntryData(id);
+  if(!entry || !entry.data) return;
   RAW_ROWS = entry.data;
   fileInfo = {name:entry.filename, rows:entry.data.length, ts:new Date(entry.date)};
   currentHistoryId = entry.id;
@@ -580,11 +629,14 @@ function openHistoryEntry(id){
   renderStock510();
   renderRupture();
   renderAnomalies();
+  // Les graphiques d'évolution agrègent l'historique complet : leurs données
+  // se chargent en arrière-plan (sans bloquer l'affichage de l'import
+  // courant) et le graphique se met à jour une fois prêt.
+  ensureAllHistoryDataLoaded().then(loaded=>{ if(loaded) renderEvolutionCharts(); });
 }
-function downloadHistoryEntry(id){
-  const list = getImportHistory();
-  const entry = list.find(e=>e.id===id);
-  if(!entry) return;
+async function downloadHistoryEntry(id){
+  const entry = await ensureHistoryEntryData(id);
+  if(!entry || !entry.data) return;
   // Télécharge l'import brut tel qu'il a été importé ce jour-là (et non
   // l'état des stocks calculé, qui a son propre bouton d'export dédié).
   const rows = (entry.data||[]).map(r=>{ const o={}; UI_COLS.forEach(c=>o[c]=r[c]); return o; });
@@ -742,7 +794,12 @@ function computeAnomaliesForRows(rows){
       const ns = rows[i].N_SERIE;
       if(ns) freq[ns] = (freq[ns]||0)+1;
     });
-    const keys = Object.keys(freq);
+    // Trié par ordre alphabétique pour que le choix du N_SERIE majoritaire
+    // soit déterministe même en cas d'égalité de fréquence : sans ce tri, le
+    // "gagnant" dépendait de l'ordre d'arrivée des lignes (potentiellement
+    // instable d'un chargement à l'autre), ce qui pouvait faire varier le
+    // nombre d'anomalies détectées pour un même fichier (ex: 15 puis 699).
+    const keys = Object.keys(freq).sort();
     if(keys.length===0) return; // aucun N_SERIE dans le groupe, rien à vérifier
     let majority = keys[0];
     keys.forEach(k=>{ if(freq[k]>freq[majority]) majority = k; });
@@ -819,7 +876,7 @@ async function loadSettingsFromSupabase(){
 async function refreshSettingsFromRemote(){
   await loadSettingsFromSupabase();
   showUpdateToast('Paramètres mis à jour');
-  renderDashboard();
+  requestDashboardRefresh();
   renderAnomalies();
   renderRupture();
 }
@@ -1343,12 +1400,12 @@ function filterDetailByGamme(g, typeGroup){
   if(typeGroup) document.getElementById('filterStatut').value = 'STOCK KUBE';
   renderDetailTable();
 }
-function filterDetailByEtat(produit, type){
+function filterDetailByEtat(produit, type, statut){
   currentGammeFilter = produit;
   currentTypeGroupFilter = null;
   showTab('detail');
   document.getElementById('detailSearch').value='';
-  document.getElementById('filterStatut').value = 'STOCK KUBE';
+  document.getElementById('filterStatut').value = statut || 'STOCK KUBE';
   document.getElementById('filterType').value = type || '';
   renderDetailTable();
 }
@@ -1500,21 +1557,59 @@ function buildEtatPivotFor(rows){
 }
 function buildEtatPivot(){ return buildEtatPivotFor(RAW_ROWS); }
 
+// Page "État des stocks" à l'écran : une colonne de décompte par STATUT
+// (STOCK KUBE, LEGEND SERVICES), chacune avec le même détail par produit /
+// type que buildEtatPivotFor. L'export Excel (buildEtatPivotFor/exportEtatDesStocksFor)
+// n'est pas concerné, il reste sur STOCK KUBE uniquement.
+const ETAT_STATUTS = ['STOCK KUBE', 'LEGEND SERVICES'];
+function buildEtatPivotMulti(rows){
+  const wanted = ['FACTICE','LDU','RDU','RDU LPM'];
+  const nserieToName = buildNserieToNameMap(rows);
+  const byStatutProduct = ETAT_STATUTS.map(statut=>{
+    const byProduct = {};
+    rows.filter(r=>r.STATUT===statut && wanted.includes(r.TYPE_PRODUIT)).forEach(r=>{
+      const label = r.PRODUIT || (r.N_SERIE && nserieToName[r.N_SERIE]) || `PRODUIT SANS NOM (ID ${r.ID}${r.N_SERIE?', N_SERIE '+r.N_SERIE:''})`;
+      byProduct[label] = byProduct[label] || {};
+      byProduct[label][r.TYPE_PRODUIT] = (byProduct[label][r.TYPE_PRODUIT]||0)+1;
+    });
+    return byProduct;
+  });
+  const allProducts = new Set();
+  byStatutProduct.forEach(bp=>Object.keys(bp).forEach(p=>allProducts.add(p)));
+  const products = [...allProducts].sort((a,b)=>a.localeCompare(b));
+  const lines = [];
+  const totals = ETAT_STATUTS.map(()=>0);
+  let num = 0;
+  products.forEach(p=>{
+    const typesPerStatut = byStatutProduct.map(bp=>bp[p]||{});
+    const allTypes = new Set();
+    typesPerStatut.forEach(t=>Object.keys(t).forEach(ty=>allTypes.add(ty)));
+    const subTotals = typesPerStatut.map(t=>Object.values(t).reduce((a,b)=>a+b,0));
+    subTotals.forEach((v,i)=>totals[i]+=v);
+    num++;
+    lines.push({label:p, values:subTotals, bold:true, num});
+    [...allTypes].sort().forEach(ty=>{
+      lines.push({label:ty, values:typesPerStatut.map(t=>t[ty]||0), bold:false, num:null});
+    });
+  });
+  return {lines, totals};
+}
+
 function renderEtat(){
   const el = document.getElementById('tab-etat');
-  const {lines, total} = buildEtatPivot();
+  const {lines, totals} = buildEtatPivotMulti(RAW_ROWS);
   window.__etatLines = lines;
-  window.__etatTotal = total;
+  window.__etatTotals = totals;
   el.innerHTML = `
   <div class="panel">
-    <h3>ETAT DES STOCKS FIN ${weekLabel()} — Statut STOCK KUBE (RDU, RDU LPM, FACTICE, LDU)</h3>
+    <h3>ETAT DES STOCKS FIN ${weekLabel()} — Statut ${ETAT_STATUTS.join(' / ')} (RDU, RDU LPM, FACTICE, LDU)</h3>
     <div class="toolbar">
       <input id="etatSearch" placeholder="Rechercher un produit..." style="width:280px" oninput="renderEtatTable(this.value)">
       <span class="count-pill" id="etatCountPill"></span>
     </div>
     <div class="table-wrap" style="max-height:640px">
       <table>
-        <thead><tr><th>Étiquettes de lignes</th><th>Nombre de STATUT</th></tr></thead>
+        <thead><tr><th>Étiquettes de lignes</th>${ETAT_STATUTS.map(s=>`<th>STATUT ${s}</th>`).join('')}</tr></thead>
         <tbody id="etatTbody"></tbody>
       </table>
     </div>
@@ -1523,15 +1618,14 @@ function renderEtat(){
 }
 function renderEtatTable(q){
   const lines = window.__etatLines;
-  const total = window.__etatTotal;
+  const totals = window.__etatTotals;
   const norm = s => String(s||'').toUpperCase().replace(/\s+/g,'');
   const qn = norm(q);
   let filtered = lines;
-  let shownTotal = total;
+  let shownTotals = totals;
   if(qn){
     filtered = [];
     let keep = false;
-    let groupTotal = 0;
     lines.forEach(l=>{
       if(l.bold){
         keep = norm(l.label).includes(qn);
@@ -1540,7 +1634,7 @@ function renderEtatTable(q){
         filtered.push(l);
       }
     });
-    shownTotal = filtered.filter(l=>l.bold).reduce((a,l)=>a+l.value,0);
+    shownTotals = ETAT_STATUTS.map((_,i)=> filtered.filter(l=>l.bold).reduce((a,l)=>a+l.values[i],0));
   }
   const groupCount = filtered.filter(l=>l.bold).length;
   document.getElementById('etatCountPill').innerHTML = `<b>${groupCount}</b><span>produit(s)</span>`;
@@ -1550,12 +1644,18 @@ function renderEtatTable(q){
     filtered.map(l=>{
       if(l.bold) curProduit = l.label;
       const safeProduit = esc(curProduit);
-      const onclick = l.bold
-        ? `filterDetailByEtat('${safeProduit}')`
-        : `filterDetailByEtat('${safeProduit}','${esc(l.label)}')`;
-      return `<tr style="${l.bold?'background:rgba(184,216,240,0.18);':''}cursor:pointer" onclick="${onclick}"><td style="${l.bold?'font-weight:700':'padding-left:24px;color:var(--muted)'}">${l.label}</td><td style="${l.bold?'font-weight:700':''}">${l.value}</td></tr>`;
+      const cells = ETAT_STATUTS.map((statut,i)=>{
+        const v = l.values[i];
+        const style = l.bold ? 'font-weight:700' : '';
+        if(!v) return `<td style="${style}color:var(--muted)">${v}</td>`;
+        const onclick = l.bold
+          ? `filterDetailByEtat('${safeProduit}', null, '${esc(statut)}')`
+          : `filterDetailByEtat('${safeProduit}','${esc(l.label)}','${esc(statut)}')`;
+        return `<td style="${style}cursor:pointer" onclick="${onclick}">${v}</td>`;
+      }).join('');
+      return `<tr style="${l.bold?'background:rgba(184,216,240,0.18)':''}"><td style="${l.bold?'font-weight:700':'padding-left:24px;color:var(--muted)'}">${l.label}</td>${cells}</tr>`;
     }).join('')
-    + `<tr><td style="font-weight:800">Total ${qn?'(filtré)':'général'}</td><td style="font-weight:800">${shownTotal}</td></tr>`;
+    + `<tr><td style="font-weight:800">Total ${qn?'(filtré)':'général'}</td>${shownTotals.map(t=>`<td style="font-weight:800">${t}</td>`).join('')}</tr>`;
 }
 
 // ---------- ANOMALIES TAB ----------
@@ -1728,7 +1828,7 @@ function saveRuptureParams(){
     else exclusions[p] = true;
   });
   setRuptureExclusions(exclusions);
-  renderDashboard();
+  requestDashboardRefresh();
   const pill = document.getElementById('ruptureParamsSavedPill');
   pill.classList.remove('hide');
   setTimeout(()=> pill.classList.add('hide'), 2500);
@@ -1766,7 +1866,7 @@ function renderParamsList(q){
 }
 function saveAnomalyParams(){
   setEnabledRules(window.__paramsPending);
-  renderDashboard();
+  requestDashboardRefresh();
   renderAnomalies();
   const pill = document.getElementById('paramsSavedPill');
   pill.classList.remove('hide');
@@ -1786,12 +1886,19 @@ function showTab(name){
   // Filet de sécurité : si le tableau de bord a été (re)construit pendant
   // qu'il était masqué (ex : synchronisation d'un autre poste reçue sur un
   // autre onglet), les graphiques Chart.js ont pu se calculer une taille
-  // nulle/incorrecte. Un resize() une fois l'onglet réellement visible
-  // corrige cela.
+  // nulle/incorrecte. Si le tableau de bord a été marqué obsolète pendant
+  // qu'il était masqué (requestDashboardRefresh), on le reconstruit
+  // maintenant qu'il est visible ; sinon un simple resize() suffit à
+  // corriger un éventuel calcul de taille fait pendant qu'il était caché.
   if(name==='dashboard'){
-    window.__gammeChart && window.__gammeChart.resize();
-    window.__anomEvolChart && window.__anomEvolChart.resize();
-    window.__ruptEvolChart && window.__ruptEvolChart.resize();
+    if(dashboardStale){
+      dashboardStale = false;
+      renderDashboard();
+    } else {
+      window.__gammeChart && window.__gammeChart.resize();
+      window.__anomEvolChart && window.__anomEvolChart.resize();
+      window.__ruptEvolChart && window.__ruptEvolChart.resize();
+    }
   }
 }
 document.querySelectorAll('.nav-btn').forEach(b=> b.addEventListener('click', ()=>showTab(b.dataset.tab)));
@@ -1822,7 +1929,7 @@ function showEmptyState(){
   await loadSettingsFromSupabase();
   await loadHistoryFromSupabase();
   if(HISTORY_CACHE.length > 0){
-    openHistoryEntry(HISTORY_CACHE[0].id);
+    await openHistoryEntry(HISTORY_CACHE[0].id);
   } else {
     showEmptyState();
   }
