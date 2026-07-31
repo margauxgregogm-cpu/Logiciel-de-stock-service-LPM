@@ -433,10 +433,15 @@ function saveLocalHistory(list){
 async function loadHistoryFromSupabase(){
   if(!sb){ HISTORY_CACHE = getLocalHistory(); return; }
   try{
+    // Trié par created_at (horodatage posé par la base à l'insertion, fiable
+    // et non modifiable côté client) plutôt que par imported_at (qui peut
+    // représenter une date déduite du nom de fichier) : deux imports faits
+    // le même jour doivent apparaître dans leur véritable ordre d'arrivée,
+    // le plus récent en premier.
     const {data, error} = await sb
       .from('import_history')
-      .select('id, imported_at, filename, rows_count, anomalies_count')
-      .order('imported_at', {ascending:false})
+      .select('id, imported_at, filename, rows_count, anomalies_count, created_at')
+      .order('created_at', {ascending:false})
       .limit(HISTORY_MAX);
     if(error) throw error;
     const previousDataById = {};
@@ -529,7 +534,7 @@ function subscribeToHistoryChanges(){
   // Filet de sécurité si Realtime rate un évènement (gros payload, etc.)
   setInterval(async ()=>{
     try{
-      const {data, error} = await sb.from('import_history').select('id').order('imported_at',{ascending:false}).limit(1);
+      const {data, error} = await sb.from('import_history').select('id').order('created_at',{ascending:false}).limit(1);
       if(error) throw error;
       const latestId = data && data[0] ? data[0].id : null;
       const knownId = HISTORY_CACHE[0] ? HISTORY_CACHE[0].id : null;
@@ -539,10 +544,14 @@ function subscribeToHistoryChanges(){
 }
 
 async function addHistoryEntry(){
-  const {date: fileDate} = extractFileDate(fileInfo.name, fileInfo.ts);
+  // entry.date/imported_at doit rester le vrai horodatage d'import (utilisé
+  // pour trier l'historique et déterminer le plus récent) : la date déduite
+  // du nom de fichier (ex: "15-07") n'est calculée qu'à l'affichage, voir
+  // entryDisplayDate(), sinon deux imports du même jour se retrouvaient avec
+  // un horodatage identique (tronqué à minuit) et un ordre imprévisible.
   const entry = {
     id: Date.now()+'_'+Math.random().toString(36).slice(2,7),
-    date: fileDate.toISOString(),
+    date: fileInfo.ts.toISOString(),
     filename: fileInfo.name,
     rows: RAW_ROWS.length,
     anomalies: anomalyRows().length,
