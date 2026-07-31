@@ -411,23 +411,59 @@ function saveLocalHistory(list){
   try{ localStorage.setItem(HISTORY_KEY, JSON.stringify(list)); }
   catch(e){ console.warn('Historique : espace de stockage local insuffisant, entrée(s) la/les plus ancienne(s) non conservée(s).'); }
 }
+// Ne charge que les métadonnées légères (pas la colonne "data", qui peut
+// représenter des dizaines de Mo cumulés sur 40 imports) : la liste
+// Historique et la détection de changements n'en ont pas besoin. Le
+// contenu complet d'un import n'est chargé qu'à la demande, voir
+// ensureHistoryEntryData()/ensureAllHistoryDataLoaded().
 async function loadHistoryFromSupabase(){
   if(!sb){ HISTORY_CACHE = getLocalHistory(); return; }
   try{
     const {data, error} = await sb
       .from('import_history')
-      .select('*')
+      .select('id, imported_at, filename, rows_count, anomalies_count')
       .order('imported_at', {ascending:false})
       .limit(HISTORY_MAX);
     if(error) throw error;
+    const previousDataById = {};
+    HISTORY_CACHE.forEach(e=>{ if(e.data) previousDataById[e.id] = e.data; });
     HISTORY_CACHE = data.map(row=>({
       id: row.id, date: row.imported_at, filename: row.filename,
-      rows: row.rows_count, anomalies: row.anomalies_count, data: row.data
+      rows: row.rows_count, anomalies: row.anomalies_count,
+      data: previousDataById[row.id] || null
     }));
     saveLocalHistory(HISTORY_CACHE);
   }catch(e){
     console.warn('Supabase indisponible, historique local utilisé.', e);
     HISTORY_CACHE = getLocalHistory();
+  }
+}
+async function ensureHistoryEntryData(id){
+  const entry = HISTORY_CACHE.find(e=>e.id===id);
+  if(!entry || entry.data || !sb) return entry;
+  try{
+    const {data, error} = await sb.from('import_history').select('data').eq('id', id).single();
+    if(error) throw error;
+    entry.data = data.data;
+  }catch(e){
+    console.warn('Échec du chargement du détail de l\'import :', e);
+  }
+  return entry;
+}
+async function ensureAllHistoryDataLoaded(){
+  if(!sb) return false;
+  const missing = HISTORY_CACHE.filter(e=>!e.data).map(e=>e.id);
+  if(missing.length===0) return false;
+  try{
+    const {data, error} = await sb.from('import_history').select('id, data').in('id', missing);
+    if(error) throw error;
+    const byId = {};
+    data.forEach(row=> byId[row.id] = row.data);
+    HISTORY_CACHE.forEach(e=>{ if(byId[e.id]) e.data = byId[e.id]; });
+    return true;
+  }catch(e){
+    console.warn('Échec du chargement complet de l\'historique (graphiques d\'évolution) :', e);
+    return false;
   }
 }
 
@@ -549,10 +585,9 @@ function renderHistorique(){
     </div>
   </div>`;
 }
-function openHistoryEntry(id){
-  const list = getImportHistory();
-  const entry = list.find(e=>e.id===id);
-  if(!entry) return;
+async function openHistoryEntry(id){
+  const entry = await ensureHistoryEntryData(id);
+  if(!entry || !entry.data) return;
   RAW_ROWS = entry.data;
   fileInfo = {name:entry.filename, rows:entry.data.length, ts:new Date(entry.date)};
   currentHistoryId = entry.id;
@@ -580,11 +615,14 @@ function openHistoryEntry(id){
   renderStock510();
   renderRupture();
   renderAnomalies();
+  // Les graphiques d'évolution agrègent l'historique complet : leurs données
+  // se chargent en arrière-plan (sans bloquer l'affichage de l'import
+  // courant) et le graphique se met à jour une fois prêt.
+  ensureAllHistoryDataLoaded().then(loaded=>{ if(loaded) renderEvolutionCharts(); });
 }
-function downloadHistoryEntry(id){
-  const list = getImportHistory();
-  const entry = list.find(e=>e.id===id);
-  if(!entry) return;
+async function downloadHistoryEntry(id){
+  const entry = await ensureHistoryEntryData(id);
+  if(!entry || !entry.data) return;
   // Télécharge l'import brut tel qu'il a été importé ce jour-là (et non
   // l'état des stocks calculé, qui a son propre bouton d'export dédié).
   const rows = (entry.data||[]).map(r=>{ const o={}; UI_COLS.forEach(c=>o[c]=r[c]); return o; });
@@ -1822,7 +1860,7 @@ function showEmptyState(){
   await loadSettingsFromSupabase();
   await loadHistoryFromSupabase();
   if(HISTORY_CACHE.length > 0){
-    openHistoryEntry(HISTORY_CACHE[0].id);
+    await openHistoryEntry(HISTORY_CACHE[0].id);
   } else {
     showEmptyState();
   }
