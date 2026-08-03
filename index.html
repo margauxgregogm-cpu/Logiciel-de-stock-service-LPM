@@ -943,35 +943,47 @@ function buildNserieToNameMap(rows){
   return map;
 }
 
+// Les bandes de stock (1-10 / 10-30 / rupture) sont calculees par
+// combinaison produit + type de produit (FACTICE/RDU/RDU LPM/LDU), pas par
+// produit global : un produit dont le stock FACTICE (factice de vitrine)
+// est abondant peut tres bien n avoir presque plus de RDU (stock reel), et
+// cette rupture reelle ne doit pas etre masquee par le total agrege.
+function bandKey(produit, type){ return produit + '##' + type; }
+function isRuptureExcluded(exclusions, produit, type){
+  return !!(exclusions[bandKey(produit,type)] || exclusions[produit]);
+}
 function productBands(){
-  // univers = tous les PRODUIT distincts non vides (ou retrouvés via N_SERIE) ;
-  // quantite = nb de lignes STATUT=STOCK KUBE pour ce produit
   const nserieToName = buildNserieToNameMap(RAW_ROWS);
   const resolveProduit = r => r.PRODUIT || (r.N_SERIE && nserieToName[r.N_SERIE]) || '';
-  const allProducts = new Set(RAW_ROWS.map(resolveProduit).filter(Boolean));
-  const stockKube = RAW_ROWS.filter(r=>r.STATUT==='STOCK KUBE');
-  const qty = {};
-  const typesByProduct = {};
-  stockKube.forEach(r=>{
+  // Univers = chaque combinaison produit+type rencontree dans le fichier
+  // (n importe quel statut), pour reperer une rupture meme quand ce type
+  // precis n a plus aucune ligne en STOCK KUBE.
+  const allPairs = new Map();
+  RAW_ROWS.forEach(r=>{
     const p = resolveProduit(r);
-    if(!p) return;
-    qty[p] = (qty[p]||0)+1;
-    typesByProduct[p] = typesByProduct[p] || {};
-    if(r.TYPE_PRODUIT) typesByProduct[p][r.TYPE_PRODUIT] = (typesByProduct[p][r.TYPE_PRODUIT]||0)+1;
+    if(!p || !r.TYPE_PRODUIT) return;
+    const key = bandKey(p, r.TYPE_PRODUIT);
+    if(!allPairs.has(key)) allPairs.set(key, {produit:p, type:r.TYPE_PRODUIT});
+  });
+  const qty = {};
+  RAW_ROWS.filter(r=>r.STATUT==='STOCK KUBE').forEach(r=>{
+    const p = resolveProduit(r);
+    if(!p || !r.TYPE_PRODUIT) return;
+    qty[bandKey(p, r.TYPE_PRODUIT)] = (qty[bandKey(p, r.TYPE_PRODUIT)]||0)+1;
   });
   const list0Raw = [], listUnder10 = [], listUnder30 = [];
-  allProducts.forEach(p=>{
-    const q = qty[p]||0;
-    const types = typesByProduct[p]||{};
-    if(q===0) list0Raw.push({produit:p, qty:q, types});
-    else if(q>=1 && q<10) listUnder10.push({produit:p, qty:q, types});
-    else if(q>=10 && q<30) listUnder30.push({produit:p, qty:q, types});
+  allPairs.forEach(({produit, type}, key)=>{
+    const q = qty[key]||0;
+    const entry = {produit, type, qty:q};
+    if(q===0) list0Raw.push(entry);
+    else if(q>=1 && q<10) listUnder10.push(entry);
+    else if(q>=10 && q<30) listUnder30.push(entry);
   });
-  list0Raw.sort((a,b)=>a.produit.localeCompare(b.produit));
+  list0Raw.sort((a,b)=> a.produit.localeCompare(b.produit) || a.type.localeCompare(b.type));
   listUnder10.sort((a,b)=>a.qty-b.qty);
   listUnder30.sort((a,b)=>a.qty-b.qty);
   const exclusions = getRuptureExclusions();
-  const list0 = list0Raw.filter(x=> !exclusions[x.produit]);
+  const list0 = list0Raw.filter(x=> !isRuptureExcluded(exclusions, x.produit, x.type));
   return {list0, list0Raw, listUnder10, listUnder30};
 }
 
@@ -1042,10 +1054,8 @@ function updateModalTable(q){
 function closeModal(){ document.getElementById('modalRoot').innerHTML=''; modalBackStack = []; }
 
 let bandAllList = [], bandClickable = false, currentBandTitle = '';
-let bandWithTypes = false;
-function openBandModal(title, list, clickable, withTypes=false){
-  bandAllList = list; bandClickable = clickable; currentBandTitle = title; bandWithTypes = withTypes;
-  const typeHeaders = withTypes ? TYPE_COLS.map(t=>`<th style="text-align:center">${t}</th>`).join('') : '';
+function openBandModal(title, list, clickable){
+  bandAllList = list; bandClickable = clickable; currentBandTitle = title;
   const root = document.getElementById('modalRoot');
   root.innerHTML = `<div class="modal-bg" onclick="if(event.target===this) closeModal()">
     <div class="modal">
@@ -1054,8 +1064,8 @@ function openBandModal(title, list, clickable, withTypes=false){
         <span class="count-pill" id="bandCountPill"></span>
         <button onclick="closeModal()">Fermer</button></div>
       <div class="modal-body">
-        <div class="table-wrap"><table><thead><tr><th>Produit</th><th>Qty STOCK KUBE</th>${typeHeaders}</tr></thead><tbody id="bandTbody"></tbody></table></div>
-        <div class="small">${clickable?'Cliquer sur un produit pour voir le détail des lignes STOCK KUBE correspondantes.':'Aucune ligne STOCK KUBE : ces produits sont à 0 (rupture).'}</div>
+        <div class="table-wrap"><table><thead><tr><th>Produit</th><th>Type</th><th>Qty STOCK KUBE</th></tr></thead><tbody id="bandTbody"></tbody></table></div>
+        <div class="small">${clickable?'Cliquer sur un produit pour voir le détail des lignes STOCK KUBE correspondantes.':'Aucune ligne STOCK KUBE pour ce type : rupture.'}</div>
       </div>
     </div></div>`;
   updateBandTable('');
@@ -1067,98 +1077,94 @@ function updateBandTable(q){
   document.getElementById('bandCountPill').innerHTML = `<b>${list.length}</b><span>produit(s)</span>`;
   const tbody = document.getElementById('bandTbody');
   tbody.innerHTML = list.map(item=>{
-    const safe = item.produit.replace(/'/g,"\\'");
-    const typeCells = bandWithTypes ? TYPE_COLS.map(t=>`<td style="text-align:center">${(item.types||{})[t]||''}</td>`).join('') : '';
+    const safeP = item.produit.replace(/'/g,"\\'");
+    const safeT = item.type.replace(/'/g,"\\'");
     const qtyCell = `<td><span class="qty-circle">${item.qty}</span></td>`;
     return bandClickable
-      ? `<tr style="cursor:pointer" onclick="showProductDetail('${safe}')"><td>${item.produit} 🔍</td>${qtyCell}${typeCells}</tr>`
-      : `<tr><td>${item.produit}</td>${qtyCell}${typeCells}</tr>`;
+      ? `<tr style="cursor:pointer" onclick="showProductDetail('${safeP}','${safeT}')"><td>${item.produit} 🔍</td><td>${item.type}</td>${qtyCell}</tr>`
+      : `<tr><td>${item.produit}</td><td>${item.type}</td>${qtyCell}</tr>`;
   }).join('');
 }
 
-function rowsForProduct(produit){
+function rowsForProduct(produit, type){
   const nserieToName = buildNserieToNameMap(RAW_ROWS);
   return RAW_ROWS.filter(r=>{
     if(r.STATUT!=='STOCK KUBE') return false;
+    if(type && r.TYPE_PRODUIT!==type) return false;
     const resolved = r.PRODUIT || (r.N_SERIE && nserieToName[r.N_SERIE]) || '';
     return resolved===produit;
   });
 }
-function showProductDetail(produit){
-  const rows = rowsForProduct(produit);
-  pushModalBack(()=> openBandModal(currentBandTitle, bandAllList, bandClickable, bandWithTypes));
-  openModal(`Détail — ${produit} (STOCK KUBE)`, UI_COLS, rows);
+function showProductDetail(produit, type){
+  const rows = rowsForProduct(produit, type);
+  pushModalBack(()=> openBandModal(currentBandTitle, bandAllList, bandClickable));
+  openModal(`Détail — ${produit} (${type}, STOCK KUBE)`, UI_COLS, rows);
 }
-function showProductDetailPlain(produit){
-  const rows = rowsForProduct(produit);
-  openModal(`Détail — ${produit} (STOCK KUBE)`, UI_COLS, rows);
+function showProductDetailPlain(produit, type){
+  const rows = rowsForProduct(produit, type);
+  openModal(`Détail — ${produit} (${type}, STOCK KUBE)`, UI_COLS, rows);
 }
 
 // ---------- PAGES STOCK 1 À 5 / STOCK 5 À 10 / RUPTURE ----------
-const TYPE_COLS = ['FACTICE','LDU','RDU','RDU LPM'];
 let stockBandLists = {stock15:[], stock510:[], rupture:[]};
 let stockBandClickable = {stock15:true, stock510:true, rupture:false};
-let stockBandWithTypes = {stock15:true, stock510:true, rupture:false};
-function renderStockBandTab(key, list, title, clickable=true, withTypes=false){
+function renderStockBandTab(key, list, title, clickable=true){
   const el = document.getElementById('tab-'+key);
   stockBandLists[key] = list;
   stockBandClickable[key] = clickable;
-  stockBandWithTypes[key] = withTypes;
-  const typeHeaders = withTypes ? TYPE_COLS.map(t=>`<th style="text-align:center">${t}</th>`).join('') : '';
   el.innerHTML = `
   <div class="panel">
     <h3>${title}</h3>
     <div class="toolbar">
       <input id="${key}Search" placeholder="Rechercher un produit..." style="width:280px" oninput="filterStockBandTab('${key}', this.value)">
       <span class="count-pill" id="${key}CountPill"></span>
-      ${withTypes ? `<button onclick="exportStockBandCSV('${key}')">Export CSV</button>` : ''}
+      ${clickable ? `<button onclick="exportStockBandCSV('${key}')">Export CSV</button>` : ''}
     </div>
     <div class="table-wrap" style="max-height:640px">
       <table>
-        <thead><tr><th>Produit</th><th>Qty STOCK KUBE</th>${typeHeaders}</tr></thead>
+        <thead><tr><th>Produit</th><th>Type</th><th>Qty STOCK KUBE</th></tr></thead>
         <tbody id="${key}Tbody"></tbody>
       </table>
     </div>
-    ${clickable ? '' : '<div class="small" style="margin-top:10px">Aucune ligne STOCK KUBE : ces produits sont à 0 (rupture).</div>'}
+    ${clickable ? '' : '<div class="small" style="margin-top:10px">Aucune ligne STOCK KUBE pour ce type : rupture.</div>'}
   </div>`;
   filterStockBandTab(key, '');
 }
 function filterStockBandTab(key, q){
   const list = stockBandLists[key] || [];
   const clickable = stockBandClickable[key]!==false;
-  const withTypes = !!stockBandWithTypes[key];
   q = (q||'').toUpperCase();
   const filtered = q ? list.filter(x=>x.produit.toUpperCase().includes(q)) : list;
   document.getElementById(key+'CountPill').innerHTML = `<b>${filtered.length}</b><span>produit(s)</span>`;
   document.getElementById(key+'Tbody').innerHTML = filtered.map(item=>{
-    const safe = item.produit.replace(/'/g,"\\'");
-    const typeCells = withTypes ? TYPE_COLS.map(t=>`<td style="text-align:center">${(item.types||{})[t]||''}</td>`).join('') : '';
+    const safeP = item.produit.replace(/'/g,"\\'");
+    const safeT = item.type.replace(/'/g,"\\'");
     const qtyCell = `<td><span class="qty-circle">${item.qty}</span></td>`;
     return clickable
-      ? `<tr style="cursor:pointer" onclick="showProductDetailPlain('${safe}')"><td>${item.produit} 🔍</td>${qtyCell}${typeCells}</tr>`
-      : `<tr><td>${item.produit}</td>${qtyCell}${typeCells}</tr>`;
+      ? `<tr style="cursor:pointer" onclick="showProductDetailPlain('${safeP}','${safeT}')"><td>${item.produit} 🔍</td><td>${item.type}</td>${qtyCell}</tr>`
+      : `<tr><td>${item.produit}</td><td>${item.type}</td>${qtyCell}</tr>`;
   }).join('');
 }
 function exportStockBandCSV(key){
   const q = (document.getElementById(key+'Search')?.value || '').toUpperCase();
   const list = stockBandLists[key] || [];
   const filtered = q ? list.filter(x=>x.produit.toUpperCase().includes(q)) : list;
-  const rows = filtered.flatMap(item=> rowsForProduct(item.produit));
+  const rows = filtered.flatMap(item=> rowsForProduct(item.produit, item.type));
   const ws = XLSX.utils.json_to_sheet(rows.map(r=>{ const o={}; UI_COLS.forEach(c=>o[c]=r[c]); return o; }));
   const csv = XLSX.utils.sheet_to_csv(ws, {FS:';'});
-  downloadBlob(csv, key==='stock15' ? 'stock_1_a_10_detail.csv' : 'stock_10_a_30_detail.csv', 'text/csv;charset=utf-8;');
+  downloadBlob(csv, key==='stock15' ? 'stock_1_a_10_detail.csv' : (key==='stock510' ? 'stock_10_a_30_detail.csv' : 'rupture_detail.csv'), 'text/csv;charset=utf-8;');
 }
 function renderStock15(){
   const bands = productBands();
-  renderStockBandTab('stock15', bands.listUnder10, 'Stock 1 à 10 (STOCK KUBE, par produit)', true, true);
+  renderStockBandTab('stock15', bands.listUnder10, 'Stock 1 à 10 (STOCK KUBE, par produit et type)', true);
 }
 function renderStock510(){
   const bands = productBands();
-  renderStockBandTab('stock510', bands.listUnder30, 'Stock 10 à 30 (STOCK KUBE, par produit)', true, true);
+  renderStockBandTab('stock510', bands.listUnder30, 'Stock 10 à 30 (STOCK KUBE, par produit et type)', true);
 }
 function renderRupture(){
   const bands = productBands();
-  renderStockBandTab('rupture', bands.list0, `Rupture — produits à 0 en STOCK KUBE (${bands.list0.length})`, false, false);
+  renderStockBandTab('rupture', bands.list0, `Rupture — produits à 0 en STOCK KUBE (${bands.list0.length})`, false);
 }
 
 function kpiRowsByStatut(s){ return RAW_ROWS.filter(r=>r.STATUT===s); }
@@ -1169,10 +1175,10 @@ function renderDashboard(){
   const anomN = anomalyRows().length;
 
   document.getElementById('topKpiGrid').innerHTML = `
-    <div class="kpi kpi-orange-filled" onclick='openBandModal("Stock 1 à 10 (STOCK KUBE, par produit)", ${JSON.stringify(bands.listUnder10)}, true, true)'>
+    <div class="kpi kpi-orange-filled" onclick='openBandModal("Stock 1 à 10 (STOCK KUBE, par produit et type)", ${JSON.stringify(bands.listUnder10)}, true)'>
       <div class="kv">${bands.listUnder10.length}</div><div class="kl">Produits stock 1 à 10</div>
     </div>
-    <div class="kpi kpi-darkorange-filled" onclick='openBandModal("Stock 10 à 30 (STOCK KUBE, par produit)", ${JSON.stringify(bands.listUnder30)}, true, true)'>
+    <div class="kpi kpi-darkorange-filled" onclick='openBandModal("Stock 10 à 30 (STOCK KUBE, par produit et type)", ${JSON.stringify(bands.listUnder30)}, true)'>
       <div class="kv">${bands.listUnder30.length}</div><div class="kl">Produits stock 10 à 30</div>
     </div>
     <div class="kpi kpi-red-filled" onclick='openBandModal("Rupture — produits à 0 en STOCK KUBE", ${JSON.stringify(bands.list0)}, false)'>
@@ -1424,11 +1430,11 @@ let BAND_MAP = {};
 function refreshBandMap(){
   BAND_MAP = {};
   const bands = productBands();
-  bands.listUnder10.forEach(x=> BAND_MAP[x.produit]='red');
-  bands.listUnder30.forEach(x=> BAND_MAP[x.produit]='orange');
+  bands.listUnder10.forEach(x=> BAND_MAP[bandKey(x.produit,x.type)]='red');
+  bands.listUnder30.forEach(x=> BAND_MAP[bandKey(x.produit,x.type)]='orange');
 }
-function alertBadge(produit){
-  const b = BAND_MAP[produit];
+function alertBadge(produit, type){
+  const b = BAND_MAP[bandKey(produit,type)];
   if(b==='red') return `<span class="badge b-red">Stock 1 à 10</span>`;
   if(b==='orange') return `<span class="badge b-orange">Stock 10 à 30</span>`;
   return '';
@@ -1501,7 +1507,7 @@ function renderDetailTable(){
   const tbody = document.querySelector('#detailTable tbody');
   thead.innerHTML = `<tr><th>Statut alerte</th>${UI_COLS.map(c=>`<th>${c}</th>`).join('')}</tr>`;
   const max = 1500;
-  tbody.innerHTML = rows.slice(0,max).map(r=>`<tr><td>${alertBadge(r.PRODUIT)}</td>${UI_COLS.map(c=>`<td>${r[c]}</td>`).join('')}</tr>`).join('');
+  tbody.innerHTML = rows.slice(0,max).map(r=>`<tr><td>${alertBadge(r.PRODUIT, r.TYPE_PRODUIT)}</td>${UI_COLS.map(c=>`<td>${r[c]}</td>`).join('')}</tr>`).join('');
   if(rows.length>max){
     tbody.innerHTML += `<tr><td colspan="${UI_COLS.length+1}" class="small">... ${rows.length-max} lignes supplémentaires non affichées (affiner la recherche)</td></tr>`;
   }
@@ -1800,7 +1806,7 @@ function renderRuptureParams(){
   window.__ruptureListRaw = bands.list0Raw;
   const exclusions = getRuptureExclusions();
   window.__rupturePending = {};
-  bands.list0Raw.forEach(x=> window.__rupturePending[x.produit] = !exclusions[x.produit]);
+  bands.list0Raw.forEach(x=> window.__rupturePending[bandKey(x.produit,x.type)] = !isRuptureExcluded(exclusions, x.produit, x.type));
   el.innerHTML = `
   <div class="panel">
     <h3 style="color:#e8a2bd;border-left-color:#e8a2bd">Paramètres des ruptures</h3>
@@ -1823,18 +1829,19 @@ function renderRuptureParamsList(q){
   document.getElementById('ruptureParamsList').innerHTML =
     list.length===0 ? '<div class="small">Aucun produit à stock 0 correspondant.</div>' :
     list.map(x=>{
-      const safe = x.produit.replace(/'/g,"\\'").replace(/"/g,'&quot;');
+      const key = bandKey(x.produit, x.type);
+      const safeKey = key.replace(/'/g,"\\'").replace(/"/g,'&quot;');
       return `<label style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer">
-          <input type="checkbox" ${window.__rupturePending[x.produit]!==false?'checked':''} onchange="window.__rupturePending['${safe}']=this.checked" style="width:16px;height:16px">
-          <span>${x.produit}</span>
+          <input type="checkbox" ${window.__rupturePending[key]!==false?'checked':''} onchange="window.__rupturePending['${safeKey}']=this.checked" style="width:16px;height:16px">
+          <span>${x.produit} — ${x.type}</span>
         </label>`;
     }).join('');
 }
 function saveRuptureParams(){
   const exclusions = getRuptureExclusions();
-  Object.keys(window.__rupturePending).forEach(p=>{
-    if(window.__rupturePending[p]) delete exclusions[p];
-    else exclusions[p] = true;
+  Object.keys(window.__rupturePending).forEach(key=>{
+    if(window.__rupturePending[key]) delete exclusions[key];
+    else exclusions[key] = true;
   });
   setRuptureExclusions(exclusions);
   requestDashboardRefresh();
