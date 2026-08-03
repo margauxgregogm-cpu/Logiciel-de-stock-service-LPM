@@ -1059,6 +1059,32 @@ function updateModalTable(q){
 }
 function closeModal(){ document.getElementById('modalRoot').innerHTML=''; modalBackStack = []; }
 
+// FACTICE et RDU/RDU LPM/LDU sont affiches dans 2 sections bien separees
+// (au lieu d une seule liste avec une colonne Type) pour qu on ne confonde
+// jamais du stock factice de vitrine avec du stock reel en un coup d oeil.
+const BAND_GROUPS = ['FACTICE', 'RDU / RDU LPM / LDU'];
+function bandGroupSuffix(g){ return g==='FACTICE' ? 'Factice' : 'Autres'; }
+function bandGroupRowsHtml(items, clickable, detailFnName){
+  if(items.length===0) return '<tr><td colspan="2" class="small" style="color:var(--muted)">Aucun produit.</td></tr>';
+  return items.map(item=>{
+    const safeP = item.produit.replace(/'/g,"\\'");
+    const safeT = item.type.replace(/'/g,"\\'");
+    const qtyCell = `<td><span class="qty-circle">${item.qty}</span></td>`;
+    return clickable
+      ? `<tr style="cursor:pointer" onclick="${detailFnName}('${safeP}','${safeT}')"><td>${item.produit} 🔍</td>${qtyCell}</tr>`
+      : `<tr><td>${item.produit}</td>${qtyCell}</tr>`;
+  }).join('');
+}
+function bandSectionsHtml(idPrefix){
+  return BAND_GROUPS.map(g=>`
+    <div style="margin-top:14px">
+      <h4 style="margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em">${g}</h4>
+      <div class="table-wrap" style="max-height:280px">
+        <table><thead><tr><th>Produit</th><th>Qty STOCK KUBE</th></tr></thead><tbody id="${idPrefix}${bandGroupSuffix(g)}"></tbody></table>
+      </div>
+    </div>`).join('');
+}
+
 let bandAllList = [], bandClickable = false, currentBandTitle = '';
 function openBandModal(title, list, clickable){
   bandAllList = list; bandClickable = clickable; currentBandTitle = title;
@@ -1070,8 +1096,8 @@ function openBandModal(title, list, clickable){
         <span class="count-pill" id="bandCountPill"></span>
         <button onclick="closeModal()">Fermer</button></div>
       <div class="modal-body">
-        <div class="table-wrap"><table><thead><tr><th>Produit</th><th>Type</th><th>Qty STOCK KUBE</th></tr></thead><tbody id="bandTbody"></tbody></table></div>
-        <div class="small">${clickable?'Cliquer sur un produit pour voir le détail des lignes STOCK KUBE correspondantes.':'Aucune ligne STOCK KUBE pour ce type : rupture.'}</div>
+        ${bandSectionsHtml('bandTbody')}
+        <div class="small">${clickable?'Cliquer sur un produit pour voir le détail des lignes STOCK KUBE correspondantes.':'Aucune ligne STOCK KUBE pour ce groupe : rupture.'}</div>
       </div>
     </div></div>`;
   updateBandTable('');
@@ -1081,15 +1107,10 @@ function updateBandTable(q){
   let list = bandAllList;
   if(q) list = list.filter(item=> item.produit.toUpperCase().includes(q));
   document.getElementById('bandCountPill').innerHTML = `<b>${list.length}</b><span>produit(s)</span>`;
-  const tbody = document.getElementById('bandTbody');
-  tbody.innerHTML = list.map(item=>{
-    const safeP = item.produit.replace(/'/g,"\\'");
-    const safeT = item.type.replace(/'/g,"\\'");
-    const qtyCell = `<td><span class="qty-circle">${item.qty}</span></td>`;
-    return bandClickable
-      ? `<tr style="cursor:pointer" onclick="showProductDetail('${safeP}','${safeT}')"><td>${item.produit} 🔍</td><td>${item.type}</td>${qtyCell}</tr>`
-      : `<tr><td>${item.produit}</td><td>${item.type}</td>${qtyCell}</tr>`;
-  }).join('');
+  BAND_GROUPS.forEach(g=>{
+    document.getElementById('bandTbody'+bandGroupSuffix(g)).innerHTML =
+      bandGroupRowsHtml(list.filter(x=>x.type===g), bandClickable, 'showProductDetail');
+  });
 }
 
 function rowsForProduct(produit, type){
@@ -1126,13 +1147,8 @@ function renderStockBandTab(key, list, title, clickable=true){
       <span class="count-pill" id="${key}CountPill"></span>
       ${clickable ? `<button onclick="exportStockBandCSV('${key}')">Export CSV</button>` : ''}
     </div>
-    <div class="table-wrap" style="max-height:640px">
-      <table>
-        <thead><tr><th>Produit</th><th>Type</th><th>Qty STOCK KUBE</th></tr></thead>
-        <tbody id="${key}Tbody"></tbody>
-      </table>
-    </div>
-    ${clickable ? '' : '<div class="small" style="margin-top:10px">Aucune ligne STOCK KUBE pour ce type : rupture.</div>'}
+    ${bandSectionsHtml(key+'Tbody')}
+    ${clickable ? '' : '<div class="small" style="margin-top:10px">Aucune ligne STOCK KUBE pour ce groupe : rupture.</div>'}
   </div>`;
   filterStockBandTab(key, '');
 }
@@ -1142,14 +1158,10 @@ function filterStockBandTab(key, q){
   q = (q||'').toUpperCase();
   const filtered = q ? list.filter(x=>x.produit.toUpperCase().includes(q)) : list;
   document.getElementById(key+'CountPill').innerHTML = `<b>${filtered.length}</b><span>produit(s)</span>`;
-  document.getElementById(key+'Tbody').innerHTML = filtered.map(item=>{
-    const safeP = item.produit.replace(/'/g,"\\'");
-    const safeT = item.type.replace(/'/g,"\\'");
-    const qtyCell = `<td><span class="qty-circle">${item.qty}</span></td>`;
-    return clickable
-      ? `<tr style="cursor:pointer" onclick="showProductDetailPlain('${safeP}','${safeT}')"><td>${item.produit} 🔍</td><td>${item.type}</td>${qtyCell}</tr>`
-      : `<tr><td>${item.produit}</td><td>${item.type}</td>${qtyCell}</tr>`;
-  }).join('');
+  BAND_GROUPS.forEach(g=>{
+    document.getElementById(key+'Tbody'+bandGroupSuffix(g)).innerHTML =
+      bandGroupRowsHtml(filtered.filter(x=>x.type===g), clickable, 'showProductDetailPlain');
+  });
 }
 function exportStockBandCSV(key){
   const q = (document.getElementById(key+'Search')?.value || '').toUpperCase();
