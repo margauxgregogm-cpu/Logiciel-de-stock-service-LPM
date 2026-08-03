@@ -998,16 +998,22 @@ function productBands(){
     if(!allPairs.has(key)) allPairs.set(key, {produit:p, type:g});
   });
   const qty = {};
+  // Detail par type exact (RDU/LDU/RDU LPM) a l interieur du groupe "RDU /
+  // RDU LPM / LDU", pour affichage uniquement : le classement en bande
+  // continue de se faire sur le total du groupe, pas sur ces sous-comptes.
+  const typeBreakdown = {};
   RAW_ROWS.filter(r=>r.STATUT==='STOCK KUBE').forEach(r=>{
     const p = resolveProduit(r);
     if(!p || !r.TYPE_PRODUIT) return;
     const key = bandKey(p, productGroupOf(r.TYPE_PRODUIT));
     qty[key] = (qty[key]||0)+1;
+    typeBreakdown[key] = typeBreakdown[key] || {};
+    typeBreakdown[key][r.TYPE_PRODUIT] = (typeBreakdown[key][r.TYPE_PRODUIT]||0)+1;
   });
   const list0Raw = [], listUnder10 = [], listUnder30 = [];
   allPairs.forEach(({produit, type}, key)=>{
     const q = qty[key]||0;
-    const entry = {produit, type, qty:q};
+    const entry = {produit, type, qty:q, typeBreakdown: typeBreakdown[key]||{}};
     if(q===0) list0Raw.push(entry);
     else if(q>=1 && q<10) listUnder10.push(entry);
     else if(q>=10 && q<30) listUnder30.push(entry);
@@ -1090,32 +1096,43 @@ function closeModal(){ document.getElementById('modalRoot').innerHTML=''; modalB
 // (au lieu d une seule liste avec une colonne Type) pour qu on ne confonde
 // jamais du stock factice de vitrine avec du stock reel en un coup d oeil.
 const BAND_GROUPS = ['FACTICE', 'RDU / RDU LPM / LDU'];
+// Detail par type exact a l interieur du groupe "RDU / RDU LPM / LDU" :
+// affiche en colonnes separees (au lieu d un seul total) sur les pages qui
+// le demandent (showBreakdown), sans jamais y mélanger le FACTICE.
+const RDU_TYPE_COLS = ['RDU', 'LDU', 'RDU LPM'];
 function bandGroupSuffix(g){ return g==='FACTICE' ? 'Factice' : 'Autres'; }
-function bandGroupRowsHtml(items, clickable, detailFnName){
-  if(items.length===0) return '<tr><td colspan="2" class="small" style="color:var(--muted)">Aucun produit.</td></tr>';
+function bandGroupRowsHtml(items, clickable, detailFnName, showBreakdown){
+  const colCount = showBreakdown ? RDU_TYPE_COLS.length+1 : 2;
+  if(items.length===0) return `<tr><td colspan="${colCount}" class="small" style="color:var(--muted)">Aucun produit.</td></tr>`;
   return items.map(item=>{
     const safeP = item.produit.replace(/'/g,"\\'");
     const safeT = item.type.replace(/'/g,"\\'");
-    const qtyCell = `<td><span class="qty-circle">${item.qty}</span></td>`;
+    const cells = showBreakdown
+      ? RDU_TYPE_COLS.map(t=>`<td style="text-align:center">${(item.typeBreakdown||{})[t]||0}</td>`).join('')
+      : `<td><span class="qty-circle">${item.qty}</span></td>`;
     return clickable
-      ? `<tr style="cursor:pointer" onclick="${detailFnName}('${safeP}','${safeT}')"><td>${item.produit} 🔍</td>${qtyCell}</tr>`
-      : `<tr><td>${item.produit}</td>${qtyCell}</tr>`;
+      ? `<tr style="cursor:pointer" onclick="${detailFnName}('${safeP}','${safeT}')"><td>${item.produit} 🔍</td>${cells}</tr>`
+      : `<tr><td>${item.produit}</td>${cells}</tr>`;
   }).join('');
 }
-function bandSectionsHtml(idPrefix){
-  const cols = BAND_GROUPS.map(g=>`
+function bandSectionsHtml(idPrefix, showBreakdown){
+  const cols = BAND_GROUPS.map(g=>{
+    const useBreakdown = showBreakdown && g!=='FACTICE';
+    const headCols = useBreakdown ? RDU_TYPE_COLS.map(t=>`<th style="text-align:center">${t}</th>`).join('') : '<th>Qty STOCK KUBE</th>';
+    return `
     <div>
       <h4 style="margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em">${g}</h4>
       <div class="table-wrap" style="max-height:400px">
-        <table><thead><tr><th>Produit</th><th>Qty STOCK KUBE</th></tr></thead><tbody id="${idPrefix}${bandGroupSuffix(g)}"></tbody></table>
+        <table><thead><tr><th>Produit</th>${headCols}</tr></thead><tbody id="${idPrefix}${bandGroupSuffix(g)}"></tbody></table>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:14px">${cols}</div>`;
 }
 
-let bandAllList = [], bandClickable = false, currentBandTitle = '';
-function openBandModal(title, list, clickable){
-  bandAllList = list; bandClickable = clickable; currentBandTitle = title;
+let bandAllList = [], bandClickable = false, currentBandTitle = '', bandShowBreakdown = false;
+function openBandModal(title, list, clickable, showBreakdown=false){
+  bandAllList = list; bandClickable = clickable; currentBandTitle = title; bandShowBreakdown = showBreakdown;
   const root = document.getElementById('modalRoot');
   root.innerHTML = `<div class="modal-bg" onclick="if(event.target===this) closeModal()">
     <div class="modal">
@@ -1124,7 +1141,7 @@ function openBandModal(title, list, clickable){
         <span class="count-pill" id="bandCountPill"></span>
         <button onclick="closeModal()">Fermer</button></div>
       <div class="modal-body">
-        ${bandSectionsHtml('bandTbody')}
+        ${bandSectionsHtml('bandTbody', showBreakdown)}
         <div class="small">${clickable?'Cliquer sur un produit pour voir le détail des lignes STOCK KUBE correspondantes.':'Aucune ligne STOCK KUBE pour ce groupe : rupture.'}</div>
       </div>
     </div></div>`;
@@ -1137,7 +1154,7 @@ function updateBandTable(q){
   document.getElementById('bandCountPill').innerHTML = `<b>${list.length}</b><span>produit(s)</span>`;
   BAND_GROUPS.forEach(g=>{
     document.getElementById('bandTbody'+bandGroupSuffix(g)).innerHTML =
-      bandGroupRowsHtml(list.filter(x=>x.type===g), bandClickable, 'showProductDetail');
+      bandGroupRowsHtml(list.filter(x=>x.type===g), bandClickable, 'showProductDetail', bandShowBreakdown && g!=='FACTICE');
   });
 }
 
@@ -1163,10 +1180,12 @@ function showProductDetailPlain(produit, type){
 // ---------- PAGES STOCK 1 À 5 / STOCK 5 À 10 / RUPTURE ----------
 let stockBandLists = {stock15:[], stock510:[], rupture:[]};
 let stockBandClickable = {stock15:true, stock510:true, rupture:false};
-function renderStockBandTab(key, list, title, clickable=true){
+let stockBandShowBreakdown = {stock15:true, stock510:true, rupture:false};
+function renderStockBandTab(key, list, title, clickable=true, showBreakdown=false){
   const el = document.getElementById('tab-'+key);
   stockBandLists[key] = list;
   stockBandClickable[key] = clickable;
+  stockBandShowBreakdown[key] = showBreakdown;
   el.innerHTML = `
   <div class="panel">
     <h3>${title}</h3>
@@ -1175,7 +1194,7 @@ function renderStockBandTab(key, list, title, clickable=true){
       <span class="count-pill" id="${key}CountPill"></span>
       ${clickable ? `<button onclick="exportStockBandCSV('${key}')">Export CSV</button>` : ''}
     </div>
-    ${bandSectionsHtml(key+'Tbody')}
+    ${bandSectionsHtml(key+'Tbody', showBreakdown)}
     ${clickable ? '' : '<div class="small" style="margin-top:10px">Aucune ligne STOCK KUBE pour ce groupe : rupture.</div>'}
   </div>`;
   filterStockBandTab(key, '');
@@ -1183,12 +1202,13 @@ function renderStockBandTab(key, list, title, clickable=true){
 function filterStockBandTab(key, q){
   const list = stockBandLists[key] || [];
   const clickable = stockBandClickable[key]!==false;
+  const showBreakdown = !!stockBandShowBreakdown[key];
   q = (q||'').toUpperCase();
   const filtered = q ? list.filter(x=>x.produit.toUpperCase().includes(q)) : list;
   document.getElementById(key+'CountPill').innerHTML = `<b>${filtered.length}</b><span>produit(s)</span>`;
   BAND_GROUPS.forEach(g=>{
     document.getElementById(key+'Tbody'+bandGroupSuffix(g)).innerHTML =
-      bandGroupRowsHtml(filtered.filter(x=>x.type===g), clickable, 'showProductDetailPlain');
+      bandGroupRowsHtml(filtered.filter(x=>x.type===g), clickable, 'showProductDetailPlain', showBreakdown && g!=='FACTICE');
   });
 }
 function exportStockBandCSV(key){
@@ -1202,11 +1222,11 @@ function exportStockBandCSV(key){
 }
 function renderStock15(){
   const bands = productBands();
-  renderStockBandTab('stock15', bands.listUnder10, 'Stock 1 à 10 (STOCK KUBE, par produit et type)', true);
+  renderStockBandTab('stock15', bands.listUnder10, 'Stock 1 à 10 (STOCK KUBE, par produit et type)', true, true);
 }
 function renderStock510(){
   const bands = productBands();
-  renderStockBandTab('stock510', bands.listUnder30, 'Stock 10 à 30 (STOCK KUBE, par produit et type)', true);
+  renderStockBandTab('stock510', bands.listUnder30, 'Stock 10 à 30 (STOCK KUBE, par produit et type)', true, true);
 }
 function renderRupture(){
   const bands = productBands();
@@ -1221,10 +1241,10 @@ function renderDashboard(){
   const anomN = anomalyRows().length;
 
   document.getElementById('topKpiGrid').innerHTML = `
-    <div class="kpi kpi-orange-filled" onclick='openBandModal("Stock 1 à 10 (STOCK KUBE, par produit et type)", ${JSON.stringify(bands.listUnder10)}, true)'>
+    <div class="kpi kpi-orange-filled" onclick='openBandModal("Stock 1 à 10 (STOCK KUBE, par produit et type)", ${JSON.stringify(bands.listUnder10)}, true, true)'>
       <div class="kv">${bands.listUnder10.length}</div><div class="kl">Produits stock 1 à 10</div>
     </div>
-    <div class="kpi kpi-darkorange-filled" onclick='openBandModal("Stock 10 à 30 (STOCK KUBE, par produit et type)", ${JSON.stringify(bands.listUnder30)}, true)'>
+    <div class="kpi kpi-darkorange-filled" onclick='openBandModal("Stock 10 à 30 (STOCK KUBE, par produit et type)", ${JSON.stringify(bands.listUnder30)}, true, true)'>
       <div class="kv">${bands.listUnder30.length}</div><div class="kl">Produits stock 10 à 30</div>
     </div>
     <div class="kpi kpi-red-filled" onclick='openBandModal("Rupture — produits à 0 en STOCK KUBE", ${JSON.stringify(bands.list0)}, false)'>
