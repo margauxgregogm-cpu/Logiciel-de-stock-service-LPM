@@ -425,6 +425,34 @@ function saveLocalHistory(list){
   try{ localStorage.setItem(HISTORY_KEY, JSON.stringify(list)); }
   catch(e){ console.warn('Historique : espace de stockage local insuffisant, entrée(s) la/les plus ancienne(s) non conservée(s).'); }
 }
+// Sans timeout explicite, une requête Supabase qui ne répond pas (réseau
+// capricieux, etc.) peut rester bloquée jusqu'au délai TCP par défaut du
+// navigateur (souvent ~2 minutes) avant d'échouer, ce qui laissait l'appli
+// affichée comme "aucun import" pendant tout ce temps. abortSignal() coupe
+// la requête bien plus tôt pour laisser retryWithTimeout() réessayer vite.
+function withTimeoutSignal(queryBuilder, ms){
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), ms);
+  return queryBuilder.abortSignal(controller.signal).then(
+    res=>{ clearTimeout(timer); return res; },
+    err=>{ clearTimeout(timer); throw err; }
+  );
+}
+async function retryWithTimeout(buildQuery, {attempts=3, timeoutMs=8000, backoffMs=1000}={}){
+  let lastError;
+  for(let i=0;i<attempts;i++){
+    try{
+      const {data, error} = await withTimeoutSignal(buildQuery(), timeoutMs);
+      if(error) throw error;
+      return data;
+    }catch(e){
+      lastError = e;
+      if(i<attempts-1) await new Promise(r=>setTimeout(r, backoffMs*(i+1)));
+    }
+  }
+  throw lastError;
+}
+
 // Ne charge que les métadonnées légères (pas la colonne "data", qui peut
 // représenter des dizaines de Mo cumulés sur 40 imports) : la liste
 // Historique et la détection de changements n'en ont pas besoin. Le
@@ -438,12 +466,11 @@ async function loadHistoryFromSupabase(){
     // représenter une date déduite du nom de fichier) : deux imports faits
     // le même jour doivent apparaître dans leur véritable ordre d'arrivée,
     // le plus récent en premier.
-    const {data, error} = await sb
+    const data = await retryWithTimeout(()=> sb
       .from('import_history')
       .select('id, imported_at, filename, rows_count, anomalies_count, created_at')
       .order('created_at', {ascending:false})
-      .limit(HISTORY_MAX);
-    if(error) throw error;
+      .limit(HISTORY_MAX));
     const previousDataById = {};
     HISTORY_CACHE.forEach(e=>{ if(e.data) previousDataById[e.id] = e.data; });
     HISTORY_CACHE = data.map(row=>({
@@ -461,9 +488,8 @@ async function ensureHistoryEntryData(id){
   const entry = HISTORY_CACHE.find(e=>e.id===id);
   if(!entry || entry.data || !sb) return entry;
   try{
-    const {data, error} = await sb.from('import_history').select('data').eq('id', id).single();
-    if(error) throw error;
-    entry.data = data.data;
+    const rows = await retryWithTimeout(()=> sb.from('import_history').select('data').eq('id', id));
+    if(rows && rows[0]) entry.data = rows[0].data;
   }catch(e){
     console.warn('Échec du chargement du détail de l\'import :', e);
   }
@@ -474,8 +500,7 @@ async function ensureAllHistoryDataLoaded(){
   const missing = HISTORY_CACHE.filter(e=>!e.data).map(e=>e.id);
   if(missing.length===0) return false;
   try{
-    const {data, error} = await sb.from('import_history').select('id, data').in('id', missing);
-    if(error) throw error;
+    const data = await retryWithTimeout(()=> sb.from('import_history').select('id, data').in('id', missing));
     const byId = {};
     data.forEach(row=> byId[row.id] = row.data);
     HISTORY_CACHE.forEach(e=>{ if(byId[e.id]) e.data = byId[e.id]; });
@@ -531,16 +556,20 @@ function subscribeToHistoryChanges(){
   sb.channel('import_history_changes')
     .on('postgres_changes', {event:'*', schema:'public', table:'import_history'}, ()=>{ refreshHistoryFromRemote(); })
     .subscribe();
-  // Filet de sécurité si Realtime rate un évènement (gros payload, etc.)
-  setInterval(async ()=>{
+  // Filet de sécurité si Realtime rate un évènement (gros payload, etc.).
+  // Sondage plus rapide (5s) tant qu'aucun historique n'est chargé (ex :
+  // premier chargement raté sur ce poste) pour se rétablir vite, puis
+  // repasse à un rythme normal (20s) une fois des données trouvées.
+  const poll = async ()=>{
     try{
-      const {data, error} = await sb.from('import_history').select('id').order('created_at',{ascending:false}).limit(1);
-      if(error) throw error;
+      const data = await retryWithTimeout(()=> sb.from('import_history').select('id').order('created_at',{ascending:false}).limit(1), {attempts:1, timeoutMs:8000});
       const latestId = data && data[0] ? data[0].id : null;
       const knownId = HISTORY_CACHE[0] ? HISTORY_CACHE[0].id : null;
-      if(latestId!==knownId || (HISTORY_CACHE.length===0 && latestId)) refreshHistoryFromRemote();
+      if(latestId!==knownId || (HISTORY_CACHE.length===0 && latestId)) await refreshHistoryFromRemote();
     }catch(e){ /* on réessaiera au prochain tick */ }
-  }, 20000);
+    setTimeout(poll, HISTORY_CACHE.length===0 ? 5000 : 20000);
+  };
+  setTimeout(poll, HISTORY_CACHE.length===0 ? 5000 : 20000);
 }
 
 async function addHistoryEntry(){
@@ -867,8 +896,7 @@ let settingsUpdatedAt = {};
 async function loadSettingsFromSupabase(){
   if(!sb) return;
   try{
-    const {data, error} = await sb.from('app_settings').select('*').in('key', ['anomaly_rules','rupture_exclusions']);
-    if(error) throw error;
+    const data = await retryWithTimeout(()=> sb.from('app_settings').select('*').in('key', ['anomaly_rules','rupture_exclusions']));
     data.forEach(row=>{
       settingsUpdatedAt[row.key] = row.updated_at;
       if(row.key==='anomaly_rules'){ ANOMALY_RULES_CACHE = row.value; try{ localStorage.setItem('soda_anomaly_rules', JSON.stringify(row.value)); }catch(e){} }
@@ -896,8 +924,7 @@ function subscribeToSettingsChanges(){
     .subscribe();
   setInterval(async ()=>{
     try{
-      const {data, error} = await sb.from('app_settings').select('key,updated_at');
-      if(error) throw error;
+      const data = await retryWithTimeout(()=> sb.from('app_settings').select('key,updated_at'), {attempts:1, timeoutMs:8000});
       let changed = false;
       data.forEach(row=>{
         if(settingsUpdatedAt[row.key] && settingsUpdatedAt[row.key]!==row.updated_at) changed = true;
