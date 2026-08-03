@@ -1103,13 +1103,14 @@ function bandGroupRowsHtml(items, clickable, detailFnName){
   }).join('');
 }
 function bandSectionsHtml(idPrefix){
-  return BAND_GROUPS.map(g=>`
-    <div style="margin-top:14px">
+  const cols = BAND_GROUPS.map(g=>`
+    <div>
       <h4 style="margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em">${g}</h4>
-      <div class="table-wrap" style="max-height:280px">
+      <div class="table-wrap" style="max-height:400px">
         <table><thead><tr><th>Produit</th><th>Qty STOCK KUBE</th></tr></thead><tbody id="${idPrefix}${bandGroupSuffix(g)}"></tbody></table>
       </div>
     </div>`).join('');
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:14px">${cols}</div>`;
 }
 
 let bandAllList = [], bandClickable = false, currentBandTitle = '';
