@@ -943,11 +943,15 @@ function buildNserieToNameMap(rows){
   return map;
 }
 
-// Les bandes de stock (1-10 / 10-30 / rupture) sont calculees par
-// combinaison produit + type de produit (FACTICE/RDU/RDU LPM/LDU), pas par
-// produit global : un produit dont le stock FACTICE (factice de vitrine)
-// est abondant peut tres bien n avoir presque plus de RDU (stock reel), et
-// cette rupture reelle ne doit pas etre masquee par le total agrege.
+// Les bandes de stock (1-10 / 10-30 / rupture) sont calculees par produit
+// et par groupe FACTICE vs RDU/RDU LPM/LDU (pas par produit global) : un
+// produit dont le stock FACTICE (factice de vitrine) est abondant peut tres
+// bien n avoir presque plus de stock reel, et cette rupture reelle ne doit
+// pas etre masquee par le total agrege. Les factices ne sont jamais
+// comptabilisees avec le stock reel (RDU/RDU LPM/LDU), meme regroupes.
+function productGroupOf(typeProduit){
+  return typeProduit==='FACTICE' ? 'FACTICE' : 'RDU / RDU LPM / LDU';
+}
 function bandKey(produit, type){ return produit + '##' + type; }
 function isRuptureExcluded(exclusions, produit, type){
   return !!(exclusions[bandKey(produit,type)] || exclusions[produit]);
@@ -955,21 +959,23 @@ function isRuptureExcluded(exclusions, produit, type){
 function productBands(){
   const nserieToName = buildNserieToNameMap(RAW_ROWS);
   const resolveProduit = r => r.PRODUIT || (r.N_SERIE && nserieToName[r.N_SERIE]) || '';
-  // Univers = chaque combinaison produit+type rencontree dans le fichier
-  // (n importe quel statut), pour reperer une rupture meme quand ce type
+  // Univers = chaque combinaison produit+groupe rencontree dans le fichier
+  // (n importe quel statut), pour reperer une rupture meme quand ce groupe
   // precis n a plus aucune ligne en STOCK KUBE.
   const allPairs = new Map();
   RAW_ROWS.forEach(r=>{
     const p = resolveProduit(r);
     if(!p || !r.TYPE_PRODUIT) return;
-    const key = bandKey(p, r.TYPE_PRODUIT);
-    if(!allPairs.has(key)) allPairs.set(key, {produit:p, type:r.TYPE_PRODUIT});
+    const g = productGroupOf(r.TYPE_PRODUIT);
+    const key = bandKey(p, g);
+    if(!allPairs.has(key)) allPairs.set(key, {produit:p, type:g});
   });
   const qty = {};
   RAW_ROWS.filter(r=>r.STATUT==='STOCK KUBE').forEach(r=>{
     const p = resolveProduit(r);
     if(!p || !r.TYPE_PRODUIT) return;
-    qty[bandKey(p, r.TYPE_PRODUIT)] = (qty[bandKey(p, r.TYPE_PRODUIT)]||0)+1;
+    const key = bandKey(p, productGroupOf(r.TYPE_PRODUIT));
+    qty[key] = (qty[key]||0)+1;
   });
   const list0Raw = [], listUnder10 = [], listUnder30 = [];
   allPairs.forEach(({produit, type}, key)=>{
@@ -1090,7 +1096,7 @@ function rowsForProduct(produit, type){
   const nserieToName = buildNserieToNameMap(RAW_ROWS);
   return RAW_ROWS.filter(r=>{
     if(r.STATUT!=='STOCK KUBE') return false;
-    if(type && r.TYPE_PRODUIT!==type) return false;
+    if(type && productGroupOf(r.TYPE_PRODUIT)!==type) return false;
     const resolved = r.PRODUIT || (r.N_SERIE && nserieToName[r.N_SERIE]) || '';
     return resolved===produit;
   });
@@ -1507,7 +1513,7 @@ function renderDetailTable(){
   const tbody = document.querySelector('#detailTable tbody');
   thead.innerHTML = `<tr><th>Statut alerte</th>${UI_COLS.map(c=>`<th>${c}</th>`).join('')}</tr>`;
   const max = 1500;
-  tbody.innerHTML = rows.slice(0,max).map(r=>`<tr><td>${alertBadge(r.PRODUIT, r.TYPE_PRODUIT)}</td>${UI_COLS.map(c=>`<td>${r[c]}</td>`).join('')}</tr>`).join('');
+  tbody.innerHTML = rows.slice(0,max).map(r=>`<tr><td>${alertBadge(r.PRODUIT, productGroupOf(r.TYPE_PRODUIT))}</td>${UI_COLS.map(c=>`<td>${r[c]}</td>`).join('')}</tr>`).join('');
   if(rows.length>max){
     tbody.innerHTML += `<tr><td colspan="${UI_COLS.length+1}" class="small">... ${rows.length-max} lignes supplémentaires non affichées (affiner la recherche)</td></tr>`;
   }
