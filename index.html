@@ -1102,13 +1102,13 @@ const BAND_GROUPS = ['FACTICE', 'RDU / RDU LPM / LDU'];
 const RDU_TYPE_COLS = ['RDU', 'LDU', 'RDU LPM'];
 function bandGroupSuffix(g){ return g==='FACTICE' ? 'Factice' : 'Autres'; }
 function bandGroupRowsHtml(items, clickable, detailFnName, showBreakdown){
-  const colCount = showBreakdown ? RDU_TYPE_COLS.length+1 : 2;
+  const colCount = showBreakdown ? RDU_TYPE_COLS.length+2 : 2;
   if(items.length===0) return `<tr><td colspan="${colCount}" class="small" style="color:var(--muted)">Aucun produit.</td></tr>`;
   return items.map(item=>{
     const safeP = item.produit.replace(/'/g,"\\'");
     const safeT = item.type.replace(/'/g,"\\'");
     const cells = showBreakdown
-      ? RDU_TYPE_COLS.map(t=>`<td style="text-align:center">${(item.typeBreakdown||{})[t]||0}</td>`).join('')
+      ? `<td><span class="qty-circle">${item.qty}</span></td>` + RDU_TYPE_COLS.map(t=>`<td style="text-align:center">${(item.typeBreakdown||{})[t]||0}</td>`).join('')
       : `<td><span class="qty-circle">${item.qty}</span></td>`;
     return clickable
       ? `<tr style="cursor:pointer" onclick="${detailFnName}('${safeP}','${safeT}')"><td>${item.produit} 🔍</td>${cells}</tr>`
@@ -1118,7 +1118,9 @@ function bandGroupRowsHtml(items, clickable, detailFnName, showBreakdown){
 function bandSectionsHtml(idPrefix, showBreakdown){
   const cols = BAND_GROUPS.map(g=>{
     const useBreakdown = showBreakdown && g!=='FACTICE';
-    const headCols = useBreakdown ? RDU_TYPE_COLS.map(t=>`<th style="text-align:center">${t}</th>`).join('') : '<th>Qty STOCK KUBE</th>';
+    const headCols = useBreakdown
+      ? '<th>Total STOCK KUBE</th>' + RDU_TYPE_COLS.map(t=>`<th style="text-align:center">${t}</th>`).join('')
+      : '<th>Qty STOCK KUBE</th>';
     return `
     <div>
       <h4 style="margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em">${g}</h4>
