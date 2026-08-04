@@ -1210,7 +1210,7 @@ function rowsForProduct(produit, type){
 }
 function showProductDetail(produit, type){
   const rows = rowsForProduct(produit, type);
-  pushModalBack(()=> openBandModal(currentBandTitle, bandAllList, bandClickable));
+  pushModalBack(()=> openBandModal(currentBandTitle, bandAllList, bandClickable, bandShowBreakdown));
   openModal(`Détail — ${produit} (${type}, STOCK KUBE)`, UI_COLS, rows);
 }
 function showProductDetailPlain(produit, type){
